@@ -109,17 +109,24 @@ def main():
     print("  (30초마다 진행상황 확인)")
     while True:
         time.sleep(30)
-        # PTY 없이 직접 SSH 명령 실행
+        # 완료 키워드 직접 검색
         result = subprocess.run(
             ["ssh", "-o", "StrictHostKeyChecking=no", "-i", SSH_KEY,
              "-p", str(RUNPOD_PORT), f"{RUNPOD_USER}@{RUNPOD_HOST}",
-             "tail -3 /workspace/auto_result.log"],
+             "grep -E '(완료!|highlight.mp4 생성됨|소요시간|오류)' /workspace/auto_result.log | tail -2"],
             capture_output=True, text=True, timeout=20
         )
         log = result.stdout.strip()
-        last_line = log.split('\n')[-1][:80] if log else "확인 중..."
-        print(f"  → {last_line}")
-        if "highlight.mp4 생성됨" in log or "완료!" in log:
+        # 진행 상황 출력
+        r2 = subprocess.run(
+            ["ssh", "-o", "StrictHostKeyChecking=no", "-i", SSH_KEY,
+             "-p", str(RUNPOD_PORT), f"{RUNPOD_USER}@{RUNPOD_HOST}",
+             "grep '처리:' /workspace/auto_result.log | tail -1"],
+            capture_output=True, text=True, timeout=20
+        )
+        progress = r2.stdout.strip()
+        print(f"  → {progress[:80] if progress else (log.split(chr(10))[-1][:80] if log else '확인 중...')}")
+        if "완료!" in log or "highlight.mp4 생성됨" in log or "소요시간" in log:
             break
         if "오류" in log or "Error" in log:
             print(f"  ❌ 오류 발생!\n{log}")

@@ -51,16 +51,31 @@ def wait_for_completion(log_file, timeout_min=30):
     start = time.time()
     while True:
         time.sleep(30)
+        # 로그 파일에서 완료 키워드 검색 (tail -20으로 충분히 읽기)
         r = subprocess.run(
             ["ssh", "-o", "StrictHostKeyChecking=no", "-i", SSH_KEY,
              "-p", str(RUNPOD_PORT), f"{RUNPOD_USER}@{RUNPOD_HOST}",
-             f"tail -3 {log_file}"],
+             f"grep -E '(완료!|highlight.mp4 생성됨|오류|Error|소요시간)' {log_file} | tail -3"],
             capture_output=True, text=True, timeout=20
         )
         log = r.stdout.strip()
-        last_line = log.split('\n')[-1][:80] if log else "확인 중..."
-        print(f"  → {last_line}")
-        if "완료!" in log or "highlight.mp4 생성됨" in log:
+
+        # 진행 상황도 별도 확인
+        r2 = subprocess.run(
+            ["ssh", "-o", "StrictHostKeyChecking=no", "-i", SSH_KEY,
+             "-p", str(RUNPOD_PORT), f"{RUNPOD_USER}@{RUNPOD_HOST}",
+             f"grep '처리:' {log_file} | tail -1"],
+            capture_output=True, text=True, timeout=20
+        )
+        progress = r2.stdout.strip()
+        if progress:
+            print(f"  → {progress[:80]}")
+        elif log:
+            print(f"  → {log.split(chr(10))[-1][:80]}")
+        else:
+            print(f"  → 확인 중...")
+
+        if "완료!" in log or "highlight.mp4 생성됨" in log or "소요시간" in log:
             return True
         if "오류" in log or "Error" in log:
             print(f"  ❌ 오류!\n{log}")
