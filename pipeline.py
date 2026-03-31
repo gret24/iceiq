@@ -503,7 +503,7 @@ def step_clips(input_file: str, number: str, team: str | None,
     with open(JERSEY_JSON, encoding="utf-8") as f:
         jersey_map = json.load(f)
 
-    # 대상 번호를 가진 track_id 수집
+    # 대상 번호를 가진 track_id 수집 (같은 번호의 모든 Track 합산)
     norm_num = number.lstrip("0") or "0"
     target_ids: set[str] = set()
     for tid_str, info in jersey_map.items():
@@ -515,7 +515,7 @@ def step_clips(input_file: str, number: str, team: str | None,
         print(f"  ⚠  번호 {number} ({team or '전체'}) 감지 기록 없음")
         return []
 
-    print(f"  대상 Track ID: {sorted(int(x) for x in target_ids)}")
+    print(f"  대상 Track ID: {sorted(int(x) for x in target_ids)} ({len(target_ids)}개)")
 
     # 대상 track 이 등장하는 extracted frame index 수집
     frame_indices: list[int] = []
@@ -563,6 +563,82 @@ def step_clips(input_file: str, number: str, team: str | None,
 
     print(f"  → {len(clip_files)}개 클립 생성 완료  (clips/)")
     return clip_files
+
+
+# ─────────────────────────────────────────────────────────
+# STEP 4b : fulltime 모드 - 첫 등장부터 마지막 등장까지 전체 구간
+# ─────────────────────────────────────────────────────────
+
+def step_clips_fulltime(input_file: str, number: str, team: str | None,
+                        fps: int = 30, buf: float = 3.0):
+    header(4, "구간 추출 중... (fulltime 모드)")
+
+    with open(TRACKS_JSON, encoding="utf-8") as f:
+        all_tracks = json.load(f)
+
+    with open(JERSEY_JSON, encoding="utf-8") as f:
+        jersey_map = json.load(f)
+
+    # 대상 번호를 가진 track_id 수집
+    norm_num = number.lstrip("0") or "0"
+    target_ids: set[str] = set()
+    for tid_str, info in jersey_map.items():
+        if (info["jersey"].lstrip("0") or "0") == norm_num:
+            if team is None or info["team"].upper() == team.upper():
+                target_ids.add(tid_str)
+
+    if not target_ids:
+        print(f"  ⚠  번호 {number} ({team or '전체'}) 감지 기록 없음")
+        return []
+
+    print(f"  대상 Track ID: {sorted(int(x) for x in target_ids)} ({len(target_ids)}개)")
+
+    # 해당 번호 선수가 등장하는 모든 프레임 인덱스 수집
+    frame_indices: list[int] = []
+    for filename in sorted(all_tracks.keys()):
+        fm = re.search(r'(\d+)', filename)
+        if not fm: continue
+        frame_idx = int(fm.group(1))
+        for t in all_tracks[filename]:
+            if str(t["track_id"]) in target_ids:
+                frame_indices.append(frame_idx)
+
+    if not frame_indices:
+        print(f"  ⚠  번호 {number} 의 등장 프레임 없음")
+        return []
+
+    frame_indices = sorted(set(frame_indices))
+    first_frame = frame_indices[0]
+    last_frame  = frame_indices[-1]
+
+    # 첫 등장 ~ 마지막 등장을 하나의 구간으로
+    start_sec = round(max(0.0, first_frame / EXTRACT_FPS - buf), 2)
+    end_sec   = round(last_frame / EXTRACT_FPS + buf, 2)
+    duration  = end_sec - start_sec
+
+    label = f"{'전체' if not team else team}팀 {number}번 선수"
+    print(f"  첫 등장: {first_frame/EXTRACT_FPS:.1f}s  마지막 등장: {last_frame/EXTRACT_FPS:.1f}s")
+    print(f"  전체 출전 구간: {start_sec}s ~ {end_sec}s  ({duration/60:.1f}분)")
+
+    with open(TIMESTAMPS_TXT, "w", encoding="utf-8") as f:
+        f.write(f"{label} 전체 출전 구간 (fulltime)\n{'='*40}\n")
+        f.write(f"구간 1: {start_sec}s ~ {end_sec}s  ({duration/60:.1f}분)\n")
+
+    os.makedirs(CLIPS_DIR, exist_ok=True)
+    for fn in os.listdir(CLIPS_DIR):
+        if fn.startswith("clip_"):
+            os.remove(os.path.join(CLIPS_DIR, fn))
+
+    out = os.path.join(CLIPS_DIR, "clip_001.mp4")
+    subprocess.run(
+        ["ffmpeg", "-y", "-ss", str(start_sec),
+         "-to", str(end_sec), "-i", input_file, "-c", "copy", out],
+        capture_output=True, check=True,
+    )
+    size_mb = round(os.path.getsize(out) / 1024 / 1024, 2)
+    print(f"  clip_001.mp4  {start_sec}s ~ {end_sec}s  ({size_mb}MB)")
+    print(f"  → 1개 클립 생성 완료 (fulltime)")
+    return [out]
 
 
 # ─────────────────────────────────────────────────────────
@@ -614,6 +690,8 @@ def main():
     parser.add_argument("--skip-extract", action="store_true", help="프레임 추출 건너뜀")
     parser.add_argument("--skip-track",   action="store_true", help="ByteTrack 추적 건너뜀")
     parser.add_argument("--skip-ocr",     action="store_true", help="등번호 OCR 건너뜀")
+    parser.add_argument("--mode",         choices=["highlight", "fulltime"], default="highlight",
+                        help="highlight: 등장 구간만 추출 (기본) / fulltime: 첫~마지막 등장 전체 구간")
     args = parser.parse_args()
 
     input_file = os.path.join(BASE_DIR, args.input) if not os.path.isabs(args.input) else args.input
@@ -625,7 +703,7 @@ def main():
     print(f"\n{'#'*45}")
     print(f"  IceIQ Pipeline (ByteTrack Edition)")
     print(f"  영상: {args.input}  번호: {args.number}  팀: {args.team or '전체'}")
-    print(f"  track_buffer={TRACK_BUFFER}프레임  추출fps={EXTRACT_FPS}")
+    print(f"  모드: {args.mode}  track_buffer={TRACK_BUFFER}프레임  추출fps={EXTRACT_FPS}")
     print(f"{'#'*45}")
 
     if not args.skip_extract:
@@ -639,7 +717,10 @@ def main():
     if not args.skip_ocr:
         jersey_map = step_ocr(all_tracks)
 
-    clip_files = step_clips(input_file, args.number, args.team, args.fps, args.buffer)
+    if args.mode == "fulltime":
+        clip_files = step_clips_fulltime(input_file, args.number, args.team, args.fps, args.buffer)
+    else:
+        clip_files = step_clips(input_file, args.number, args.team, args.fps, args.buffer)
     step_highlight(clip_files)
 
     elapsed = time.time() - t0
