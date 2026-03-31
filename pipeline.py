@@ -236,10 +236,12 @@ def _easyocr_jersey(reader, crop_arr: np.ndarray) -> tuple[str, float] | None:
         text = text.strip()
         if not _is_jersey(text):
             continue
-        # 2자리 숫자는 신뢰도 가산 (더 신뢰)
-        bonus = 0.2 if len(text) == 2 else 0.0
+        # 1자리 숫자는 높은 confidence 요구 (오인식 방지)
+        min_conf = 0.5 if len(text) == 1 else 0.15
+        # 2자리 숫자는 신뢰도 가산
+        bonus = 0.3 if len(text) == 2 else 0.0
         adjusted = conf + bonus
-        if adjusted > 0.1:
+        if adjusted >= min_conf:
             if best is None or adjusted > best[1]:
                 best = (text, adjusted)
     return best
@@ -341,10 +343,15 @@ def step_ocr(all_tracks: dict | None = None):
             img = Image.open(path).convert("RGB")
             iw, ih = img.size
 
-            # [개선 2] 전체 박스 크롭
+            # 등번호 위치에 집중한 크롭
+            # 전체 박스 + 상반신 중앙(15%~70%) 두 가지 크롭 시도
             cx1 = max(0, x1); cy1 = max(0, y1)
             cx2 = min(iw, x2); cy2 = min(ih, y2)
-            crop = img.crop((cx1, cy1, cx2, cy2))
+            # 상반신 중앙 크롭 (등번호가 주로 가슴/등에 위치)
+            ny1 = y1 + int(h * 0.15)
+            ny2 = y1 + int(h * 0.70)
+            crop_jersey = img.crop((cx1, max(0,ny1), cx2, min(ih,ny2)))
+            crop = crop_jersey  # 등번호 집중 크롭 사용
 
             # [개선 3] 전처리
             proc = _preprocess_crop(crop)
@@ -370,10 +377,19 @@ def step_ocr(all_tracks: dict | None = None):
 
         # 다수결로 최종 번호 결정
         if vote_map:
-            # 2자리 숫자가 있으면 우선, 그 중 confidence 합산 최고
+            # 2자리 숫자가 있으면 강하게 우선 (1자리는 무시)
             two_digit = {k: v for k, v in vote_map.items() if len(k) == 2}
-            final_votes = two_digit if two_digit else vote_map
-            best_num = max(final_votes, key=final_votes.get)
+            if two_digit:
+                # 2자리 중 confidence 합산 최고
+                best_num = max(two_digit, key=two_digit.get)
+            else:
+                # 2자리 없으면 1자리 중 최고 confidence (단, threshold 충족 시만)
+                max_conf = max(vote_map.values())
+                if max_conf >= 0.5:
+                    best_num = max(vote_map, key=vote_map.get)
+                else:
+                    continue  # 신뢰도 낮은 1자리는 스킵
+
             team_str = recognized[1] if recognized else "UNKNOWN"
             jersey_map[str(tid)] = {"jersey": best_num, "team": team_str}
             found += 1
