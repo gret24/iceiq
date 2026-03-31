@@ -228,13 +228,21 @@ def _preprocess_crop(crop_img: Image.Image) -> Image.Image:
     return ImageEnhance.Contrast(big).enhance(2.0)
 
 
-def _easyocr_jersey(reader, crop_arr: np.ndarray) -> str | None:
-    """EasyOCR로 등번호 인식 (confidence 0.1 이상)"""
+def _easyocr_jersey(reader, crop_arr: np.ndarray) -> tuple[str, float] | None:
+    """EasyOCR로 등번호 인식 → (번호, confidence) 반환"""
     results = reader.readtext(crop_arr, allowlist='0123456789', min_size=5)
+    best = None
     for (_, text, conf) in results:
-        if _is_jersey(text) and conf > 0.1:
-            return text.strip()
-    return None
+        text = text.strip()
+        if not _is_jersey(text):
+            continue
+        # 2자리 숫자는 신뢰도 가산 (더 신뢰)
+        bonus = 0.2 if len(text) == 2 else 0.0
+        adjusted = conf + bonus
+        if adjusted > 0.1:
+            if best is None or adjusted > best[1]:
+                best = (text, adjusted)
+    return best
 
 
 def _claude_jersey(claude_client, crop_img: Image.Image) -> str | None:
@@ -308,8 +316,15 @@ def step_ocr(all_tracks: dict | None = None):
 
     for i, (tid, frame_list) in enumerate(sorted(track_frames.items()), 1):
         recognized = None
+        # 다수결: {번호: 누적 confidence}
+        vote_map: dict[str, float] = {}
+        # 최대 5개 프레임까지 투표 수집
+        MAX_VOTE_FRAMES = 5
 
-        for filename, track in frame_list:
+        for filename, track in frame_list[:MAX_VOTE_FRAMES * 3]:  # 여유있게 탐색
+            if len(vote_map) > 0 and sum(1 for v in vote_map.values() if v > 0) >= MAX_VOTE_FRAMES:
+                break
+
             x1, y1, x2, y2 = track["x1"], track["y1"], track["x2"], track["y2"]
             w, h = x2 - x1, y2 - y1
             if w * h <= MIN_BOX_AREA:
@@ -341,20 +356,28 @@ def step_ocr(all_tracks: dict | None = None):
             torso = arr[ty1:ty2, x1:x2]
             team = _uniform_color(torso) if torso.size > 0 else "UNKNOWN"
 
-            # [개선 1] EasyOCR (confidence 0.1)
-            num = _easyocr_jersey(reader, crop_arr)
-            if num:
-                recognized = (num, team, "EasyOCR")
-                easyocr_hit += 1
-                break
+            # [개선 1] EasyOCR → 다수결 투표
+            result = _easyocr_jersey(reader, crop_arr)
+            if result:
+                num, conf = result
+                vote_map[num] = vote_map.get(num, 0) + conf
+                # 팀 정보는 첫 번째 인식 기준으로 저장
+                if not recognized:
+                    recognized = (num, team, "EasyOCR")
 
-            # 과부하 방지: 매 프레임마다 짧은 대기
-            time.sleep(0.05)
+            # 과부하 방지
+            time.sleep(0.03)
 
-        if recognized:
-            jersey_str, team_str, method = recognized
-            jersey_map[str(tid)] = {"jersey": jersey_str, "team": team_str}
+        # 다수결로 최종 번호 결정
+        if vote_map:
+            # 2자리 숫자가 있으면 우선, 그 중 confidence 합산 최고
+            two_digit = {k: v for k, v in vote_map.items() if len(k) == 2}
+            final_votes = two_digit if two_digit else vote_map
+            best_num = max(final_votes, key=final_votes.get)
+            team_str = recognized[1] if recognized else "UNKNOWN"
+            jersey_map[str(tid)] = {"jersey": best_num, "team": team_str}
             found += 1
+            easyocr_hit += 1
 
         if i % 10 == 0 or i == total:
             elapsed = time.time() - t0
