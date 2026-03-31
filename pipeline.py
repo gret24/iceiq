@@ -284,7 +284,7 @@ def step_ocr(all_tracks: dict | None = None):
         with open(TRACKS_JSON, encoding="utf-8") as f:
             all_tracks = json.load(f)
 
-    reader = easyocr.Reader(['en'], gpu=False, verbose=False)
+    reader = easyocr.Reader(['en'], gpu=True, verbose=False)
     claude_client = anthropic.Anthropic()
 
     # 각 track_id의 등장 프레임 목록 수집 (여러 프레임 시도 가능하도록)
