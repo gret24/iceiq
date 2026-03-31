@@ -14,3 +14,9 @@ tracks.json
 jersey_map.json
 *.log
 .DS_Store
+
+# 클립 디렉토리 (대용량)
+clips_*/
+
+# 대용량 JSON
+features_map.json
