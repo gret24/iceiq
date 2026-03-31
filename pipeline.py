@@ -532,9 +532,10 @@ def step_clips(input_file: str, number: str, team: str | None,
         print(f"  ⚠  번호 {number} 의 등장 프레임 없음")
         return []
 
-    # 추출 fps 기준으로 시간 변환, gap=4 (= 2초 공백이면 새 구간)
+    # 추출 fps 기준으로 시간 변환
+    # gap=60 → 30초 공백까지는 같은 구간 (교체 전까지 빙판에 있는 전체 시간 포착)
     segments = _to_segments(sorted(set(frame_indices)),
-                            fps=EXTRACT_FPS, buf=buf, gap=4)
+                            fps=EXTRACT_FPS, buf=buf, gap=60)
     label = f"{'전체' if not team else team}팀 {number}번 선수"
 
     print(f"  감지 횟수: {len(frame_indices)}회 → {len(segments)}개 구간")
