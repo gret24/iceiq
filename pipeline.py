@@ -229,16 +229,69 @@ def _preprocess_crop(crop_img: Image.Image) -> Image.Image:
 
 
 def _easyocr_jersey(reader, crop_arr: np.ndarray) -> tuple[str, float] | None:
-    """EasyOCR로 등번호 인식 → (번호, confidence) 반환"""
+    """EasyOCR로 등번호 인식 → (번호, confidence) 반환
+    핵심 개선: 인접한 1자리 숫자를 합쳐 2자리로 복원 (47→4+7 분리 문제 해결)
+    """
     results = reader.readtext(crop_arr, allowlist='0123456789', min_size=5)
-    best = None
-    for (_, text, conf) in results:
+    if not results:
+        return None
+
+    # ── 인접 숫자 합치기 ──────────────────────────────────
+    # results 형식: [([[x1,y1],[x2,y2],[x3,y3],[x4,y4]], text, conf), ...]
+    # 같은 행에 있는 1자리 숫자들을 x좌표 순서로 합침
+    candidates = []
+
+    # 1) 직접 인식된 결과 먼저 수집
+    for (bbox, text, conf) in results:
         text = text.strip()
+        if not text.isdigit():
+            continue
+        x_center = (bbox[0][0] + bbox[2][0]) / 2
+        y_center = (bbox[0][1] + bbox[2][1]) / 2
+        candidates.append({"text": text, "conf": conf, "x": x_center, "y": y_center, "bbox": bbox})
+
+    # 2) 인접한 1자리 숫자 쌍을 2자리로 합치기
+    merged = []
+    used = set()
+    # x 좌표 기준 정렬
+    candidates.sort(key=lambda c: c["x"])
+
+    for i, c1 in enumerate(candidates):
+        if i in used:
+            continue
+        if len(c1["text"]) == 1:
+            # 오른쪽에 인접한 1자리 숫자 찾기
+            for j, c2 in enumerate(candidates[i+1:], i+1):
+                if j in used:
+                    continue
+                if len(c2["text"]) != 1:
+                    continue
+                # x 거리가 가까우면 (bbox 너비의 2배 이내) 합치기
+                w1 = abs(c1["bbox"][2][0] - c1["bbox"][0][0])
+                x_gap = c2["x"] - c1["x"]
+                if x_gap < w1 * 2.5:
+                    merged_text = c1["text"] + c2["text"]
+                    merged_conf = (c1["conf"] + c2["conf"]) / 2 + 0.2  # 합친 보너스
+                    if _is_jersey(merged_text):
+                        merged.append({"text": merged_text, "conf": merged_conf})
+                    used.add(i); used.add(j)
+                    break
+
+        # 합치지 못한 것은 그대로 유지
+        if i not in used:
+            merged.append({"text": c1["text"], "conf": c1["conf"]})
+            used.add(i)
+
+    # 3) 최종 후보 중 최고 신뢰도 선택
+    best = None
+    for item in merged:
+        text = item["text"]
+        conf = item["conf"]
         if not _is_jersey(text):
             continue
-        # 1자리 숫자는 높은 confidence 요구 (오인식 방지)
-        min_conf = 0.5 if len(text) == 1 else 0.15
-        # 2자리 숫자는 신뢰도 가산
+        # 1자리는 높은 confidence 필요
+        min_conf = 0.6 if len(text) == 1 else 0.15
+        # 2자리 추가 보너스
         bonus = 0.3 if len(text) == 2 else 0.0
         adjusted = conf + bonus
         if adjusted >= min_conf:
