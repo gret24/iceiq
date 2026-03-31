@@ -1,0 +1,16 @@
+venv/
+venv_ocr/
+frames/
+detected/
+clips/
+_corrected_tmp/
+__pycache__/
+*.mp4
+*.pt
+*.jpg
+*.png
+*.ogg
+tracks.json
+jersey_map.json
+*.log
+.DS_Store
