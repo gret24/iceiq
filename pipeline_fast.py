@@ -395,7 +395,29 @@ class TeamCalibrator:
                     self.team_labels = {home_cluster: "AWAY", 1 - home_cluster: "HOME"}
 
         self.calibrated = True
+        self._save_csv_if_needed()
         return True
+
+
+    def _save_csv_if_needed(self):
+        """디버그 CSV 저장"""
+        import csv as _csv
+        import os
+        try:
+            os.makedirs("/workspace/iceiq/output", exist_ok=True)
+            csv_path = "/workspace/iceiq/output/team_debug.csv"
+            with open(csv_path, "w", newline="") as csvf:
+                w = _csv.writer(csvf)
+                w.writerow(["track_id","cluster","team","h_peak","s_peak"])
+                for i, (feat, tid) in enumerate(self.color_samples):
+                    ci = int(self._labels[i])
+                    team = self.team_labels.get(ci, "UNKNOWN")
+                    h_peak = int(np.argmax(feat[:32]) * 180 / 32)
+                    s_peak = int(np.argmax(feat[32:]) * 256 / 32)
+                    w.writerow([tid, ci, team, h_peak, s_peak])
+            print(f"  디버그 CSV: {csv_path} ({len(self.color_samples)}행)")
+        except Exception as e:
+            print(f"  CSV 저장 실패: {e}")
 
     def classify(self, feat: "np.ndarray") -> str:
         """특징벡터 → 팀 라벨"""
