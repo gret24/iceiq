@@ -308,14 +308,18 @@ class TeamCalibrator:
         self.frame_count        = 0
         self.color_samples      = []   # (feat, track_id) 목록
         self.cluster_centers    = None # shape (2, 64)
-        self.team_labels        = {0: "HOME", 1: "AWAY"}  # cluster_idx → team
-        self.calibrated         = False
+        self.cluster_labels_raw = None # KMeans 결과 레이블
+        self.team_labels        = {0: "UNKNOWN", 1: "UNKNOWN"}
+        self.clustered          = False  # KMeans 완료 여부
+        self.calibrated         = False  # 팀 라벨 확정 여부
         self.referee_filtered   = 0
+        self.vote_frame         = -1     # 라벨 확정된 프레임 인덱스
+        self.vote_count         = 0      # 투표에 참여한 confirmed 수
 
     def collect(self, feat: "np.ndarray", track_id: int,
                  bbox_area: float = 0, conf: float = 1.0):
         """캘리브레이션 단계에서 특징 수집 (면적/confidence 필터)"""
-        if feat is None or self.calibrated:
+        if feat is None or self.clustered:
             return
         if bbox_area > 0 and bbox_area < 1000:  # 너무 작은 bbox 제외
             return
@@ -323,20 +327,107 @@ class TeamCalibrator:
             return
         self.color_samples.append((feat.copy(), track_id))
 
-    def calibrate(self, home_roster: set = None, confirmed_map: dict = None):
-        """수집된 샘플로 KMeans(k=2) + 팀 라벨 결정"""
-        if len(self.color_samples) < 10:
+    def cluster_only(self):
+        """1단계: KMeans 클러스터링만 수행 (팀 라벨 미확정)"""
+        if len(self.color_samples) < 10 or self.clustered:
             return False
-
         from sklearn.cluster import KMeans
         feats = np.array([s[0] for s in self.color_samples])
-        tids  = [s[1] for s in self.color_samples]
-
         km = KMeans(n_clusters=2, n_init=20, random_state=42)
-        labels = km.fit_predict(feats)
+        self.cluster_labels_raw = km.fit_predict(feats)
         self.cluster_centers = km.cluster_centers_
-        self._labels = labels  # 디버그용
-        self._tids   = tids
+        filtered = 0
+        for ci in range(2):
+            m = feats[self.cluster_labels_raw == ci]
+            if len(m):
+                d = np.linalg.norm(m - self.cluster_centers[ci], axis=1)
+                filtered += int(np.sum(d > np.mean(d) * 2.0))
+        self.referee_filtered = filtered
+        self.clustered = True
+        cnt0 = int(np.sum(self.cluster_labels_raw == 0))
+        cnt1 = int(np.sum(self.cluster_labels_raw == 1))
+        print(f"  [팀구분 1단계] 클러스터 완료: cluster0={cnt0} cluster1={cnt1}")
+        return True
+
+    def decide_labels(self, home_roster: set, confirmed_map: dict, frame_idx: int = -1) -> bool:
+        """2단계: OCR confirmed 선수 투표로 팀 라벨 확정"""
+        if not self.clustered or self.calibrated:
+            return False
+        # confirmed_tracks에서 직접 classify로 클러스터 투표
+        home_votes = {0: 0, 1: 0}
+        voted = 0
+        # 각 confirmed track의 최근 색상 특징을 classify
+        # jersey_map 파일도 참조 (기존 분석 결과 + 실시간 OCR 합산)
+        import json as _json_v, os as _os_v
+        all_maps = dict(confirmed_map)
+        try:
+            jpath = _os_v.path.join(_os_v.path.dirname(_os_v.path.abspath(__file__)), "jersey_map.json")
+            with open(jpath) as _f:
+                all_maps.update(_json_v.load(_f))
+        except Exception:
+            pass
+        for feat, tid in self.color_samples:
+            if str(tid) in all_maps:
+                num = all_maps[str(tid)]["jersey"].lstrip("0") or "0"
+                if num in home_roster:
+                    dists = [float(np.linalg.norm(feat - c)) for c in self.cluster_centers]
+                    ci = int(np.argmin(dists))
+                    home_votes[ci] += 1
+                    voted += 1
+        print(f"  [팀구분 투표] samples={len(self.color_samples)}, all_maps={len(all_maps)}, voted={voted}")
+        if voted < 3:
+            return False
+        home_cluster = max(home_votes, key=home_votes.get)
+        self.team_labels = {home_cluster: "HOME", 1 - home_cluster: "AWAY"}
+        self.vote_count = voted
+        self.vote_frame = frame_idx
+        print(f"  [팀구분 2단계] 투표({voted}명) @ frame{frame_idx}: "
+              f"cluster0={home_votes[0]} cluster1={home_votes[1]} → HOME=cluster{home_cluster}")
+        self._finalize(home_roster, confirmed_map)
+        return True
+
+    def finalize_by_count(self):
+        """투표 미완료 시 선수 수로 강제 확정"""
+        if not self.clustered or self.calibrated:
+            return
+        cnt0 = int(np.sum(self.cluster_labels_raw == 0))
+        cnt1 = int(np.sum(self.cluster_labels_raw == 1))
+        home_cluster = 1 if cnt1 >= cnt0 else 0
+        self.team_labels = {home_cluster: "HOME", 1 - home_cluster: "AWAY"}
+        print(f"  [팀구분 강제확정] 선수수: cluster0={cnt0} cluster1={cnt1} → HOME=cluster{home_cluster}")
+        self._finalize()
+
+    def _finalize(self, home_roster: set = None, confirmed_map: dict = None):
+        """정확도 체크 + 라벨 반전 + CSV 저장"""
+        if home_roster and confirmed_map:
+            tids = [s[1] for s in self.color_samples]
+            correct = total = 0
+            for i, tid in enumerate(tids):
+                if str(tid) in confirmed_map:
+                    num = confirmed_map[str(tid)]["jersey"].lstrip("0") or "0"
+                    expected = "HOME" if num in home_roster else "AWAY"
+                    predicted = self.team_labels.get(self.cluster_labels_raw[i], "UNKNOWN")
+                    if predicted != "UNKNOWN":
+                        total += 1
+                        if predicted == expected: correct += 1
+            if total >= 5:
+                acc = correct / total
+                print(f"  [팀구분] 사전 정확도: {acc*100:.1f}% ({correct}/{total})")
+                if acc < 0.50:
+                    print(f"  [팀구분] 라벨 반전")
+                    self.team_labels = {k: ("HOME" if v=="AWAY" else "AWAY") for k,v in self.team_labels.items()}
+        self.calibrated = True
+        self._save_csv_if_needed()
+
+    def calibrate(self, home_roster: set = None, confirmed_map: dict = None):
+        """구버전 호환: 1+2단계 통합 실행"""
+
+        if not self.cluster_only():
+            return False
+        tids  = [s[1] for s in self.color_samples]
+        feats = np.array([s[0] for s in self.color_samples])
+        labels = self.cluster_labels_raw
+        self._labels = labels; self._tids = tids
 
         # 심판/아웃라이어 필터링 집계
         filtered_count = 0
@@ -394,8 +485,6 @@ class TeamCalibrator:
                     print(f"  [팀구분] 정확도 50% 미만 → 라벨 반전")
                     self.team_labels = {home_cluster: "AWAY", 1 - home_cluster: "HOME"}
 
-        self.calibrated = True
-        self._save_csv_if_needed()
         return True
 
 
@@ -420,8 +509,8 @@ class TeamCalibrator:
             print(f"  CSV 저장 실패: {e}")
 
     def classify(self, feat: "np.ndarray") -> str:
-        """특징벡터 → 팀 라벨"""
-        if not self.calibrated or feat is None:
+        """특징벡터 → 팀 라벨 (미확정이면 UNKNOWN)"""
+        if not self.clustered or feat is None:
             return "UNKNOWN"
         dists = [np.linalg.norm(feat - c) for c in self.cluster_centers]
         best_cluster = int(np.argmin(dists))
@@ -619,17 +708,23 @@ def step_ocr(all_tracks=None, roster_set: set = None, correction_map: dict = Non
             continue
 
         # 캘리브레이션 샘플 수집 (초반 N프레임)
-        if team_calibrator is not None and not calibration_done:
-            if fi < team_calibrator.calibration_frames:
-                for t2 in frame_tracks:
-                    area = (t2["x2"]-t2["x1"]) * (t2["y2"]-t2["y1"])
-                    f2 = extract_color_feature(bgr, t2["x1"],t2["y1"],t2["x2"],t2["y2"])
-                    team_calibrator.collect(f2, t2["track_id"],
-                                             bbox_area=area, conf=t2.get("conf",1.0))
-            elif not team_calibrator.calibrated:
-                team_calibrator.calibrate(home_roster_set, confirmed_tracks)
-                calibration_done = True
-                print(f"  [팀 자동구분 완료] {fi}프레임 기준\n{team_calibrator.summary()}")
+        if team_calibrator is not None:
+            if not calibration_done:
+                if fi < team_calibrator.calibration_frames:
+                    for t2 in frame_tracks:
+                        area = (t2["x2"]-t2["x1"]) * (t2["y2"]-t2["y1"])
+                        f2 = extract_color_feature(bgr, t2["x1"],t2["y1"],t2["x2"],t2["y2"])
+                        team_calibrator.collect(f2, t2["track_id"],
+                                                 bbox_area=area, conf=t2.get("conf",1.0))
+                elif not team_calibrator.clustered:
+                    if team_calibrator.cluster_only():
+                        calibration_done = True
+                        print(f"  [팀구분 1단계 완료] {fi}프레임")
+            # 2단계: calibration_done 여부와 무관하게 체크
+            if (team_calibrator.clustered and not team_calibrator.calibrated
+                    and home_roster_set and len(confirmed_tracks) >= 3):
+                if team_calibrator.decide_labels(home_roster_set, confirmed_tracks, fi):
+                    print(f"  [팀 자동구분 완료]\n{team_calibrator.summary()}")
 
         img_pil = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
 
@@ -785,26 +880,15 @@ def step_ocr(all_tracks=None, roster_set: set = None, correction_map: dict = Non
                   f"경과: {elapsed/60:.1f}분")
 
     # pending 중 미확정인 것도 jersey_map에 추가 (1회 인식된 것)
-    # 루프 종료 후 캘리브레이션 미완료면 강제 실행
-    if team_calibrator is not None and not team_calibrator.calibrated:
-        ok = team_calibrator.calibrate(home_roster_set, confirmed_tracks)
-        if ok:
-            print(f"  [팀 자동구분 완료 (루프후)]\n{team_calibrator.summary()}")
-            # CSV 디버그 파일 저장
-            import csv as _csv
-            os.makedirs("/workspace/iceiq/output", exist_ok=True)
-            csv_path = "/workspace/iceiq/output/team_debug.csv"
-            with open(csv_path, "w", newline="") as csvf:
-                w = _csv.writer(csvf)
-                w.writerow(["track_id","cluster","team","ocr_num","h_peak","s_peak"])
-                for i, (feat, tid) in enumerate(team_calibrator.color_samples):
-                    ci = int(team_calibrator._labels[i])
-                    team = team_calibrator.team_labels.get(ci, "UNKNOWN")
-                    ocr_num = confirmed_tracks.get(str(tid), {}).get("jersey", "")
-                    h_peak = int(np.argmax(feat[:32]) * 180 / 32)
-                    s_peak = int(np.argmax(feat[32:]) * 256 / 32)
-                    w.writerow([tid, ci, team, ocr_num, h_peak, s_peak])
-            print(f"  디버그: {csv_path}")
+    # 루프 종료 후 라벨 미확정이면 강제 확정
+    if team_calibrator is not None:
+        if team_calibrator.clustered and not team_calibrator.calibrated:
+            # 투표 재시도
+            if home_roster_set and len(confirmed_tracks) >= 3:
+                ok = team_calibrator.decide_labels(home_roster_set, confirmed_tracks, -1)
+            if not team_calibrator.calibrated:
+                team_calibrator.finalize_by_count()
+            print(f"  [팀 자동구분 최종]\n{team_calibrator.summary()}")
 
     for tid, votes in pending_tracks.items():
         if tid in confirmed_tracks:
