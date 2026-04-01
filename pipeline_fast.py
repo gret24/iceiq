@@ -5,7 +5,7 @@ pipeline_fast.py — 속도 개선 버전
 2. OCR: 확인된 track 재사용 (새 track만 OCR)
 3. GPU 가속 (EasyOCR gpu=True, YOLO GPU)
 """
-import json, os, re, shutil, time, io, base64
+import json, os, re, shutil, time, io, base64, subprocess
 from concurrent.futures import ThreadPoolExecutor
 import cv2
 import numpy as np
@@ -266,17 +266,225 @@ def step_ocr(all_tracks=None):
     return jersey_map
 
 
-if __name__ == "__main__":
-    import sys
-    if len(sys.argv) > 1:
-        BASE_DIR = sys.argv[1]
-        FRAMES_DIR  = os.path.join(BASE_DIR, "frames")
-        DETECTED_DIR= os.path.join(BASE_DIR, "detected")
-        TRACKS_JSON = os.path.join(BASE_DIR, "tracks.json")
-        JERSEY_JSON = os.path.join(BASE_DIR, "jersey_map.json")
-        RESULTS_TXT = os.path.join(BASE_DIR, "results.txt")
+
+
+import argparse, subprocess, json as _json, math as _math
+
+# ── 하이라이트 생성 ─────────────────────────────────────────────────
+
+def make_shifts(jersey_map: dict, tracks_data: dict, target_num: str,
+                gap_sec: float = 10.0, buf_sec: float = 5.0,
+                fps: int = 4) -> list[dict]:
+    """jersey_map + tracks에서 특정 선수의 시프트 추출"""
+    target_norm = target_num.lstrip("0") or "0"
+    target_tids = {tid for tid, info in jersey_map.items()
+                   if info["jersey"].lstrip("0") == target_norm}
+
+    if not target_tids:
+        print(f"  ⚠ {target_num}번 선수 없음")
+        return []
+
+    # 등장 프레임 수집
+    frame_indices = []
+    for fname, fts in sorted(tracks_data.items()):
+        fm = __import__("re").search(r"(\d+)", fname)
+        if not fm: continue
+        fidx = int(fm.group(1))
+        for t in fts:
+            if str(t["track_id"]) in target_tids:
+                frame_indices.append(fidx)
+                break
+
+    if not frame_indices:
+        return []
+
+    frame_indices = sorted(set(frame_indices))
+    gap_frames = int(gap_sec * fps)
+
+    # 프레임 그룹 → 시프트
+    groups, s, e = [], frame_indices[0], frame_indices[0]
+    for f in frame_indices[1:]:
+        if f - e <= gap_frames:
+            e = f
+        else:
+            groups.append((s, e))
+            s = e = f
+    groups.append((s, e))
+
+    shifts = []
+    for gs, ge in groups:
+        start = max(0.0, gs / fps - buf_sec)
+        end   = ge / fps + buf_sec
+        shifts.append({
+            "start_sec": round(start, 2),
+            "end_sec":   round(end, 2),
+            "duration":  round(end - start, 2),
+        })
+
+    return shifts
+
+
+def make_highlight(video_path: str, shifts: list[dict],
+                   target_num: str, out_dir: str) -> str | None:
+    """시프트 클립을 이어붙여 하이라이트 영상 생성 (텍스트 오버레이 포함)"""
+    os.makedirs(out_dir, exist_ok=True)
+    clips_dir = os.path.join(out_dir, "clips_tmp")
+    os.makedirs(clips_dir, exist_ok=True)
+
+    clip_files = []
+    total_ice = sum(s["duration"] for s in shifts)
+
+    print(f"  시프트 {len(shifts)}개 추출 중... (총 아이스타임 {total_ice/60:.1f}분)")
+
+    for i, shift in enumerate(shifts, 1):
+        s_sec = shift["start_sec"]
+        e_sec = shift["end_sec"]
+        mm, ss = divmod(int(s_sec), 60)
+        label_text = f"Shift {i}  {mm}:{ss:02d}"
+
+        # drawtext 필터: 왼쪽 상단 2초 표시
+        vf = (
+            f"drawtext=text='{label_text}':fontsize=36:fontcolor=white:"
+            f"x=20:y=20:box=1:boxcolor=black@0.5:boxborderw=5:"
+            f"enable=\'between(t,0,2)\'"
+        )
+        out_clip = os.path.join(clips_dir, f"clip_{i:03d}.mp4")
+        r = subprocess.run([
+            "ffmpeg", "-y",
+            "-ss", str(s_sec), "-to", str(e_sec),
+            "-i", video_path,
+            "-vf", vf,
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            "-c:a", "aac", out_clip
+        ], capture_output=True)
+        if r.returncode == 0 and os.path.exists(out_clip):
+            clip_files.append(out_clip)
+            print(f"    shift {i}: {mm}:{ss:02d} ~ {int(e_sec)//60:02d}:{int(e_sec)%60:02d} ({shift['duration']:.0f}초)")
+        else:
+            print(f"    shift {i}: 실패 - {r.stderr[-200:].decode() if r.stderr else "알수없음"}")
+
+    if not clip_files:
+        return None
+
+    # concat
+    concat_txt = os.path.join(clips_dir, "concat.txt")
+    with open(concat_txt, "w") as f:
+        for c in clip_files:
+            f.write(f"file '{c}'\n")
+
+    out_path = os.path.join(out_dir, f"{target_num}_highlight.mp4")
+    r2 = subprocess.run([
+        "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+        "-i", concat_txt, "-c", "copy", out_path
+    ], capture_output=True)
+
+    if r2.returncode == 0:
+        size_mb = os.path.getsize(out_path) / 1024 / 1024
+        print(f"\n  ✅ {target_num}_highlight.mp4 완성! ({size_mb:.1f}MB, {len(clip_files)}개 클립)")
+    else:
+        print(f"  ❌ concat 실패")
+        return None
+
+    # 임시 클립 정리
+    shutil.rmtree(clips_dir, ignore_errors=True)
+    return out_path
+
+
+def save_shift_metadata(shifts: list[dict], target_num: str, out_dir: str):
+    """시프트 메타데이터 JSON 저장"""
+    os.makedirs(out_dir, exist_ok=True)
+    total_ice = sum(s["duration"] for s in shifts)
+    meta = {
+        "player": target_num,
+        "total_shifts": len(shifts),
+        "total_ice_time_sec": round(total_ice, 2),
+        "total_ice_time_min": round(total_ice / 60, 2),
+        "shifts": shifts,
+    }
+    out_path = os.path.join(out_dir, f"{target_num}_shifts.json")
+    with open(out_path, "w") as f:
+        _json.dump(meta, f, ensure_ascii=False, indent=2)
+    print(f"  메타데이터: {out_path}")
+    return out_path
+
+
+def main():
+    parser = argparse.ArgumentParser(description="pipeline_fast + 하이라이트 생성")
+    parser.add_argument("--input",       required=True, help="입력 영상 경로")
+    parser.add_argument("--player",      required=True, help="추출할 선수 등번호")
+    parser.add_argument("--home-roster", type=str, default="")
+    parser.add_argument("--away-roster", type=str, default="")
+    parser.add_argument("--fps",         type=int, default=4)
+    parser.add_argument("--mode",        choices=["highlight", "fulltime"], default="highlight")
+    parser.add_argument("--gap",         type=float, default=10.0, help="시프트 갭 기준 (초)")
+    parser.add_argument("--buf",         type=float, default=5.0,  help="시프트 앞뒤 버퍼 (초)")
+    parser.add_argument("--out-dir",     type=str, default="/workspace/iceiq/output")
+    parser.add_argument("--skip-extract",action="store_true")
+    parser.add_argument("--skip-track",  action="store_true")
+    parser.add_argument("--skip-ocr",    action="store_true")
+    args = parser.parse_args()
+
+    global BASE_DIR, FRAMES_DIR, DETECTED_DIR, TRACKS_JSON, JERSEY_JSON, EXTRACT_FPS
+
+    video_path = args.input
+    video_dir  = os.path.dirname(os.path.abspath(video_path))
+    BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
+    EXTRACT_FPS = args.fps
 
     t0 = time.time()
-    tracks = step_track()
-    step_ocr(tracks)
-    print(f"\n총 소요: {(time.time()-t0)/60:.1f}분")
+    print(f"\n{'='*50}")
+    print(f"  pipeline_fast + 하이라이트")
+    print(f"  영상: {os.path.basename(video_path)}  선수: #{args.player}")
+    print(f"{'='*50}")
+
+    # 분석
+    all_tracks = None
+    if not args.skip_track:
+        all_tracks = step_track()
+    else:
+        print("[2] ByteTrack 건너뜀")
+        with open(TRACKS_JSON) as f:
+            all_tracks = _json.load(f)
+
+    jersey_map = None
+    if not args.skip_ocr:
+        jersey_map = step_ocr(all_tracks)
+    else:
+        print("[3] OCR 건너뜀")
+        with open(JERSEY_JSON) as f:
+            jersey_map = _json.load(f)
+
+    if jersey_map is None or all_tracks is None:
+        print("분석 실패"); return
+
+    # 시프트 추출
+    print("\n[4] 시프트 추출")
+    shifts = make_shifts(jersey_map, all_tracks, args.player,
+                         gap_sec=args.gap, buf_sec=args.buf, fps=EXTRACT_FPS)
+
+    if not shifts:
+        print(f"  {args.player}번 선수 감지 없음")
+        return
+
+    print(f"  {len(shifts)}개 시프트 감지")
+
+    # 메타데이터 저장
+    save_shift_metadata(shifts, args.player, args.out_dir)
+
+    # 하이라이트 생성
+    print("\n[5] 하이라이트 영상 생성")
+    out_path = make_highlight(video_path, shifts, args.player, args.out_dir)
+
+    elapsed = time.time() - t0
+    total_ice = sum(s["duration"] for s in shifts)
+    print(f"\n{'='*50}")
+    print(f"  완료! ({elapsed/60:.1f}분)")
+    print(f"  시프트: {len(shifts)}개  총 아이스타임: {total_ice/60:.1f}분")
+    if out_path:
+        print(f"  출력: {out_path}")
+    print(f"{'='*50}\n")
+
+
+if __name__ == "__main__":
+    main()
+
