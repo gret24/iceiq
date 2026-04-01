@@ -772,11 +772,30 @@ def main():
 
     # RosterManager 통계 출력
     if roster_mgr is not None:
-        profiles = roster_mgr._profiles
+        import json as _json
+        stats = roster_mgr.get_stats()
+        profiles = roster_mgr.get_player_profiles()
+        print(f"\n  {'='*45}")
+        print(f"  [RosterManager 식별 통계]")
+        total = stats.pop("_total", 0)
+        for method, info in stats.items():
+            bar = "█" * int(info["pct"] / 5)
+            print(f"    {method:<18}: {info['count']:4d}건 ({info['pct']:5.1f}%) {bar}")
+        print(f"    {'합계':<18}: {total:4d}건")
         if profiles:
-            print(f"\n  [RosterManager] 등록된 선수 프로필: {len(profiles)}개")
+            print(f"\n  [학습된 선수 프로필: {len(profiles)}개]")
             for key, p in sorted(profiles.items()):
-                print(f"    #{p.jersey_number} ({p.team}) | 색상학습: {p._color_count}회 | 스케이팅: {'있음' if p.skating_signature else '없음'}")
+                print(f"    #{p['jersey']} ({p['team']}) | 색상학습: {p['color_learned']}회")
+                if p['color_signature']:
+                    cs = p['color_signature']
+                    print(f"      색상: H={cs.get('h_mean','?'):.1f} S={cs.get('s_mean','?'):.1f} V={cs.get('v_mean','?'):.1f}")
+                if p['skating_signature']:
+                    sk = p['skating_signature']
+                    print(f"      스케이팅: stride={sk.get('stride_length','?')} posture={sk.get('posture_ratio','?')}")
+                if p['stick_signature']:
+                    st = p['stick_signature']
+                    print(f"      스틱: pos={st.get('stick_position','?')} rhythm={st.get('handling_rhythm','?')}")
+        print(f"  {'='*45}")
     print(f"{'#'*45}\n")
 
 

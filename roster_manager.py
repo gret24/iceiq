@@ -174,6 +174,10 @@ class RosterManager:
         self._away_roster: list[str] = []
         self._correction_map: dict[tuple, str] = {}      # (4,7) -> "47"
         self._behavior = BehaviorExtractor()
+        self._stats: dict = {
+            "direct_ocr": 0, "correction_map": 0, "color_match": 0,
+            "behavior_match": 0, "combined_match": 0, "history": 0, "failed": 0,
+        }
 
     # ── 로스터 설정 ─────────────────────────────────────────
     def set_roster(self, home: list = None, away: list = None):
@@ -281,6 +285,7 @@ class RosterManager:
             matched = self.roster_match(ocr_text, team)
             if matched:
                 self.register_features(matched, team or "UNKNOWN", color_features)
+                self._stats['direct_ocr'] += 1
                 self._track_history[track_id] = matched
                 return matched
 
@@ -290,6 +295,7 @@ class RosterManager:
             corrected = self.correction_lookup(digits)
             if corrected:
                 self.register_features(corrected, team or "UNKNOWN", color_features)
+                self._stats['correction_map'] += 1
                 self._track_history[track_id] = corrected
                 return corrected
 
@@ -302,6 +308,7 @@ class RosterManager:
             if sim > best_color_score:
                 best_color_score, best_color = sim, profile.jersey_number
         if best_color_score > 0.75:
+            self._stats['color_match'] += 1
             self._track_history[track_id] = best_color
             return best_color
 
@@ -322,20 +329,51 @@ class RosterManager:
                 if sim > best_beh_score:
                     best_beh_score, best_beh = sim, profile.jersey_number
             if best_beh_score > 0.70:
+                self._stats['behavior_match'] += 1
                 self._track_history[track_id] = best_beh
                 return best_beh
 
             # ⑤ 색상 + 행동 결합
             num, score = self.identify_by_features(color_features, behavior, team)
             if num:
+                self._stats['combined_match'] += 1
                 self._track_history[track_id] = num
                 return num
 
         # ⑥ track_id 히스토리
         if track_id in self._track_history:
+            self._stats['history'] += 1
             return self._track_history[track_id]
 
+        self._stats['failed'] += 1
         return None
+
+
+    def get_stats(self) -> dict:
+        total = sum(v for k,v in self._stats.items() if k != "failed")
+        result = {}
+        for method, count in self._stats.items():
+            pct = count / total * 100 if total > 0 else 0.0
+            result[method] = {"count": count, "pct": round(pct,1)}
+        result["_total"] = total
+        return result
+
+    def get_player_profiles(self) -> dict:
+        out = {}
+        for key, p in self._profiles.items():
+            c_sig = {k: round(v,2) for k,v in p.color_signature.items()}
+            sk_sig = {}
+            for k,v in p.skating_signature.items():
+                sk_sig[k] = [round(x,3) for x in v] if isinstance(v,list) else round(v,3) if isinstance(v,float) else v
+            st_sig = {k: round(v,3) for k,v in p.stick_signature.items()}
+            out[key] = {
+                "jersey": p.jersey_number, "team": p.team,
+                "color_learned": p._color_count,
+                "color_signature": c_sig,
+                "skating_signature": sk_sig,
+                "stick_signature": st_sig,
+            }
+        return out
 
 
 # ── 유틸리티 ──────────────────────────────────────────────
