@@ -48,8 +48,8 @@ TIMESTAMPS_TXT  = os.path.join(BASE_DIR, "timestamps.txt")
 HIGHLIGHT_PATH  = os.path.join(BASE_DIR, "highlight.mp4")
 HIGHLIGHT_OLD   = os.path.join(BASE_DIR, "highlight_old.mp4")
 
-EXTRACT_FPS  = 2          # 프레임 추출 FPS
-MIN_BOX_AREA = 5000       # 너무 작은 bbox 무시
+EXTRACT_FPS  = 4          # 프레임 추출 FPS (정확도 향상)
+MIN_BOX_AREA = 3000       # 너무 작은 bbox 무시
 TRACK_BUFFER = 30         # 선수 안 보여도 유지할 프레임 수 (추출 기준)
 BLUR_THRESHOLD = 50       # 라플라시안 분산 이 이하면 블러 프레임으로 스킵
 
@@ -151,8 +151,8 @@ def step_track():
             persist=True,
             tracker="bytetrack.yaml",
             classes=[0],          # 사람(class 0)만
-            conf=0.25,            # 0.3 → 0.25 (경계선 선수 추가 감지)
-            iou=0.45,
+            conf=0.18,            # 0.25 → 0.18 (작은/먼 선수 추가 감지)
+            iou=0.40,
             verbose=False,
         )
 

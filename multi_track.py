@@ -22,8 +22,8 @@ TRACKS_JSON    = os.path.join(BASE_DIR, "tracks.json")
 JERSEY_JSON    = os.path.join(BASE_DIR, "jersey_map.json")
 FEATURES_JSON  = os.path.join(BASE_DIR, "features_map.json")
 # _highlight_path / _clips_dir are set dynamically inside run_pipeline
-EXTRACT_FPS    = 2
-MIN_BOX_AREA   = 3000
+EXTRACT_FPS    = 4
+MIN_BOX_AREA   = 2500
 BLUR_THRESHOLD = 40
 
 sys.path.insert(0, BASE_DIR)
@@ -421,7 +421,7 @@ def main():
     parser.add_argument("video")
     parser.add_argument("number")
     parser.add_argument("team", nargs="?", default=None, help="팀 필터: HOME / AWAY (미입력 시 전체 스캔 - 기본값 권장)")
-    parser.add_argument("--gap",  type=int,   default=20)
+    parser.add_argument("--gap",  type=int,   default=10)
     parser.add_argument("--buf",  type=float, default=3.0)
     parser.add_argument("--out",  type=str,   default=None, help="출력 파일 suffix (기본: 번호)")
     args = parser.parse_args()
