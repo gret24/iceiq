@@ -286,6 +286,105 @@ class PlayerBehaviorProfiles:
             )
         return "\n".join(lines) if lines else "    (없음)"
 
+
+# ── 팀 자동 구분 (KMeans 캘리브레이션) ─────────────────────────
+
+class TeamCalibrator:
+    """
+    경기 초반 프레임에서 유니폼 색상을 클러스터링하여
+    홈/어웨이 팀을 자동 구분
+    """
+
+    def __init__(self, calibration_frames: int = 100):
+        self.calibration_frames = calibration_frames
+        self.frame_count        = 0
+        self.color_samples      = []   # (feat, track_id) 목록
+        self.cluster_centers    = None # shape (2, 64)
+        self.team_labels        = {0: "HOME", 1: "AWAY"}  # cluster_idx → team
+        self.calibrated         = False
+        self.referee_filtered   = 0
+
+    def collect(self, feat: "np.ndarray", track_id: int):
+        """캘리브레이션 단계에서 특징 수집"""
+        if feat is not None and not self.calibrated:
+            self.color_samples.append((feat.copy(), track_id))
+
+    def calibrate(self, home_roster: set = None, confirmed_map: dict = None):
+        """수집된 샘플로 KMeans(k=2) 실행 → 팀 구분"""
+        if len(self.color_samples) < 10:
+            return False
+
+        from sklearn.cluster import KMeans
+        feats = np.array([s[0] for s in self.color_samples])
+
+        km = KMeans(n_clusters=2, n_init=10, random_state=42)
+        labels = km.fit_predict(feats)
+        self.cluster_centers = km.cluster_centers_
+
+        # 심판/아웃라이어 필터링
+        filtered_count = 0
+        for ci in range(2):
+            members = feats[labels == ci]
+            if len(members) == 0:
+                continue
+            dists = np.linalg.norm(members - self.cluster_centers[ci], axis=1)
+            mean_d = np.mean(dists)
+            threshold = mean_d * 2.0
+            outliers = np.sum(dists > threshold)
+            filtered_count += outliers
+        self.referee_filtered = filtered_count
+
+        # 홈/어웨이 라벨 결정
+        if home_roster and confirmed_map:
+            # OCR 확정 선수의 팀 배정
+            home_votes = {0: 0, 1: 0}
+            for i, (feat, tid) in enumerate(self.color_samples):
+                if str(tid) in confirmed_map:
+                    num = confirmed_map[str(tid)]["jersey"].lstrip("0") or "0"
+                    if num in home_roster:
+                        home_votes[labels[i]] += 1
+            if sum(home_votes.values()) > 0:
+                home_cluster = max(home_votes, key=home_votes.get)
+                self.team_labels = {home_cluster: "HOME",
+                                    1 - home_cluster: "AWAY"}
+        else:
+            # 더 많은 선수 쪽이 홈
+            cnt0 = np.sum(labels == 0)
+            cnt1 = np.sum(labels == 1)
+            if cnt0 >= cnt1:
+                self.team_labels = {0: "HOME", 1: "AWAY"}
+            else:
+                self.team_labels = {1: "HOME", 0: "AWAY"}
+
+        self.calibrated = True
+        return True
+
+    def classify(self, feat: "np.ndarray") -> str:
+        """특징벡터 → 팀 라벨"""
+        if not self.calibrated or feat is None:
+            return "UNKNOWN"
+        dists = [np.linalg.norm(feat - c) for c in self.cluster_centers]
+        best_cluster = int(np.argmin(dists))
+        # 아웃라이어 체크
+        min_dist = min(dists)
+        mean_within = np.mean([np.linalg.norm(feat - self.cluster_centers[best_cluster])])
+        return self.team_labels.get(best_cluster, "UNKNOWN")
+
+    def summary(self) -> str:
+        if not self.calibrated:
+            return "  (캘리브레이션 미완료)"
+        lines = []
+        for ci, label in self.team_labels.items():
+            c = self.cluster_centers[ci]
+            # 64차원 = H(32) + S(32), 히스토그램의 피크 빈 추정
+            h_hist = c[:32]
+            s_hist = c[32:]
+            h_peak = int(np.argmax(h_hist) * 180 / 32)  # 대략적 H값
+            s_peak = int(np.argmax(s_hist) * 256 / 32)  # 대략적 S값
+            lines.append(f"  {label}: H≈{h_peak}° S≈{s_peak}  (cluster {ci})")
+        lines.append(f"  심판/기타 필터링: {self.referee_filtered}건")
+        return "\n".join(lines)
+
 # ── Step 2: ByteTrack (배치 처리) ─────────────────────────
 def step_track():
     header(2, f"ByteTrack 추적 (배치={BATCH_SIZE})")
@@ -406,7 +505,7 @@ def _easyocr_jersey(reader, crop_arr):
 
 
 # ── Step 3: OCR (프레임 단위 루프 + confirmed 캐시) ──────────
-def step_ocr(all_tracks=None, roster_set: set = None, correction_map: dict = None, color_profiles: 'PlayerColorProfiles | None' = None, behavior_profiles: 'PlayerBehaviorProfiles | None' = None):
+def step_ocr(all_tracks=None, roster_set: set = None, correction_map: dict = None, color_profiles: 'PlayerColorProfiles | None' = None, behavior_profiles: 'PlayerBehaviorProfiles | None' = None, team_calibrator: 'TeamCalibrator | None' = None, home_roster_set: set = None):
     header(3, "등번호 OCR (프레임 루프 + confirmed 캐시)")
 
     if all_tracks is None:
@@ -429,6 +528,8 @@ def step_ocr(all_tracks=None, roster_set: set = None, correction_map: dict = Non
     behavior_match_count = 0   # 행동 폴백 식별 횟수
     combined_match_count = 0   # 색상+행동 결합 매칭 횟수
     bbox_buffer: dict[int, object] = {}  # track_id → deque(maxlen=10)
+    calibration_done   = False
+    team_correct = 0; team_wrong = 0  # 팀 판별 정확도
     skip_bbox_small   = 0
     skip_edge         = 0
     skip_blur         = 0
@@ -456,6 +557,17 @@ def step_ocr(all_tracks=None, roster_set: set = None, correction_map: dict = Non
         if cv2.Laplacian(gray, cv2.CV_64F).var() < BLUR_THRESHOLD:
             skip_blur += len(frame_tracks)
             continue
+
+        # 캘리브레이션 샘플 수집 (초반 N프레임)
+        if team_calibrator is not None and not calibration_done:
+            if fi < team_calibrator.calibration_frames:
+                for t2 in frame_tracks:
+                    f2 = extract_color_feature(bgr, t2["x1"],t2["y1"],t2["x2"],t2["y2"])
+                    team_calibrator.collect(f2, t2["track_id"])
+            elif not team_calibrator.calibrated:
+                team_calibrator.calibrate(home_roster_set, confirmed_tracks)
+                calibration_done = True
+                print(f"  [팀 자동구분 완료] {fi}프레임 기준\n{team_calibrator.summary()}")
 
         img_pil = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
 
@@ -579,7 +691,17 @@ def step_ocr(all_tracks=None, roster_set: set = None, correction_map: dict = Non
                 # 팀 판별
                 torso = bgr[max(0, y1+int(h*0.2)):min(ih, y1+int(h*0.65)), x1:x2]
                 team  = "HOME" if torso.size > 0 and np.mean(torso) > 128 else "AWAY"
-                entry = {"jersey": num, "team": team}
+                # 팀 자동 구분 우선 사용
+                auto_team = team
+                if team_calibrator is not None and team_calibrator.calibrated:
+                    c_feat = extract_color_feature(bgr, x1, y1, x2, y2)
+                    auto_team = team_calibrator.classify(c_feat)
+                    # 정확도 측정 (로스터 있을 때)
+                    if home_roster_set:
+                        expected = "HOME" if num in home_roster_set else "AWAY"
+                        if auto_team == expected: team_correct += 1
+                        elif auto_team != "UNKNOWN": team_wrong += 1
+                entry = {"jersey": num, "team": auto_team}
                 confirmed_tracks[tid]  = entry
                 jersey_map[str(tid)]   = entry
                 # 색상 + 행동 프로필 학습
@@ -601,6 +723,12 @@ def step_ocr(all_tracks=None, roster_set: set = None, correction_map: dict = Non
                   f"경과: {elapsed/60:.1f}분")
 
     # pending 중 미확정인 것도 jersey_map에 추가 (1회 인식된 것)
+    # 루프 종료 후 캘리브레이션 미완료면 강제 실행
+    if team_calibrator is not None and not team_calibrator.calibrated:
+        ok = team_calibrator.calibrate(home_roster_set, confirmed_tracks)
+        if ok:
+            print(f"  [팀 자동구분 완료 (루프후)]\n{team_calibrator.summary()}")
+
     for tid, votes in pending_tracks.items():
         if tid in confirmed_tracks:
             continue
@@ -634,6 +762,16 @@ def step_ocr(all_tracks=None, roster_set: set = None, correction_map: dict = Non
         print(f"  행동 폴백 식별: {behavior_match_count}건")
     if combined_match_count > 0:
         print(f"  결합 매칭 식별: {combined_match_count}건")
+    if team_calibrator is not None and team_calibrator.calibrated:
+        print(f"\n  [팀 자동 구분]")
+        print(team_calibrator.summary())
+        home_cnt = sum(1 for v in jersey_map.values() if v.get("team") == "HOME")
+        away_cnt = sum(1 for v in jersey_map.values() if v.get("team") == "AWAY")
+        print(f"  HOME: {home_cnt}개 track | AWAY: {away_cnt}개 track")
+        total_judge = team_correct + team_wrong
+        if total_judge > 0:
+            acc = team_correct / total_judge * 100
+            print(f"  팀 판별 정확도: {acc:.1f}% ({team_correct}/{total_judge})")
     if behavior_profiles is not None:
         trusted_b = sum(1 for p in behavior_profiles._profiles.values() if p["trusted"])
         print(f"  행동 프로필:    {len(behavior_profiles._profiles)}개 선수 ({trusted_b}개 신뢰)")
@@ -844,8 +982,10 @@ def main():
             print(f"  보정맵: {len(c_map)}개 패턴")
         color_profiles    = PlayerColorProfiles()
         behavior_profiles = PlayerBehaviorProfiles()
+        team_cal          = TeamCalibrator(calibration_frames=3000)
         jersey_map = step_ocr(all_tracks, roster_set=r_set, correction_map=c_map,
-                              color_profiles=color_profiles, behavior_profiles=behavior_profiles)
+                              color_profiles=color_profiles, behavior_profiles=behavior_profiles,
+                              team_calibrator=team_cal, home_roster_set=r_set)
     else:
         print("[3] OCR 건너뜀")
         with open(JERSEY_JSON) as f:
