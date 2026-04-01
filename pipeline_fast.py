@@ -122,35 +122,68 @@ def _correct_ice_glare(img_path: str) -> np.ndarray | None:
 
 # ── 색상 특징 유틸리티 ────────────────────────────────────────
 
+def _region_hsv_feat(bgr: "np.ndarray", ry1: int, ry2: int,
+                      x1: int, x2: int) -> "np.ndarray":
+    """단일 영역 H+S+V 히스토그램 96차원"""
+    region = bgr[max(0,ry1):max(0,ry2), max(0,x1):min(bgr.shape[1],x2)]
+    if region.size == 0:
+        return np.zeros(96, dtype=np.float32)
+    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv, np.array([0,30,30]), np.array([180,255,255]))
+    if np.sum(mask>0) < 10:
+        mask = None
+    hh = cv2.calcHist([hsv],[0],mask,[32],[0,180])
+    sh = cv2.calcHist([hsv],[1],mask,[32],[0,256])
+    vh = cv2.calcHist([hsv],[2],mask,[32],[0,256])
+    feat = np.concatenate([hh,sh,vh]).flatten().astype(np.float32)
+    norm = np.linalg.norm(feat)
+    return feat / norm if norm > 0 else feat
+
+
+def _dominant_hs(bgr: "np.ndarray", ry1: int, ry2: int,
+                  x1: int, x2: int) -> "tuple[float,float]":
+    """유효 픽셀의 H/S median"""
+    region = bgr[max(0,ry1):max(0,ry2), max(0,x1):min(bgr.shape[1],x2)]
+    if region.size == 0:
+        return 0.0, 0.0
+    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+    mask = (hsv[:,:,1]>30) & (hsv[:,:,2]>30)
+    if np.sum(mask) < 5:
+        return 0.0, 0.0
+    return float(np.median(hsv[:,:,0][mask])), float(np.median(hsv[:,:,1][mask]))
+
+
 def extract_color_feature(bgr: "np.ndarray", x1: int, y1: int,
                            x2: int, y2: int) -> "np.ndarray | None":
     """
-    선수 bbox 20%~60% 영역 (유니폼 몸통, 헬멧 제외)
-    흰색(얼음반사)/검은색(그림자) 마스킹 후 HSV 히스토그램 (64차원)
+    상체(20~60%) + 하체(60~85%) 각 96차원 = 192차원 특징벡터
+    H32 + S32 + V32 per region
     """
     h_box = y2 - y1
     if h_box < 20:
         return None
-    # 20%~60% 영역 (헬멧 제외, 유니폼 몸통)
-    ty1 = max(0, y1 + int(h_box * 0.20))
-    ty2 = max(0, y1 + int(h_box * 0.60))
-    if ty2 <= ty1:
-        return None
-    region = bgr[ty1:ty2, max(0, x1):min(bgr.shape[1], x2)]
-    if region.size == 0:
-        return None
-    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
-    # 마스크: S>=30 AND V>=30 (흰색/검은색/회색 제거)
-    mask = cv2.inRange(hsv, np.array([0, 30, 30]), np.array([180, 255, 255]))
-    valid_pixels = np.sum(mask > 0)
-    if valid_pixels < 10:
-        # 유효 픽셀 부족 → 마스크 없이 전체 사용
-        mask = None
-    h_hist = cv2.calcHist([hsv], [0], mask, [32], [0, 180])
-    s_hist = cv2.calcHist([hsv], [1], mask, [32], [0, 256])
-    feat = np.concatenate([h_hist, s_hist]).flatten().astype(np.float32)
-    norm = np.linalg.norm(feat)
+    upper_y1 = y1 + int(h_box * 0.20)
+    upper_y2 = y1 + int(h_box * 0.60)
+    lower_y1 = y1 + int(h_box * 0.60)
+    lower_y2 = y1 + int(h_box * 0.85)
+    upper = _region_hsv_feat(bgr, upper_y1, upper_y2, x1, x2)
+    lower = _region_hsv_feat(bgr, lower_y1, lower_y2, x1, x2)
+    feat  = np.concatenate([upper, lower]).astype(np.float32)
+    norm  = np.linalg.norm(feat)
     return feat / norm if norm > 0 else None
+
+
+def extract_color_feature_with_dominant(bgr, x1, y1, x2, y2):
+    """extract_color_feature + dominant H/S 반환"""
+    feat = extract_color_feature(bgr, x1, y1, x2, y2)
+    h_box = y2 - y1
+    upper_y1 = y1 + int(h_box * 0.20)
+    upper_y2 = y1 + int(h_box * 0.60)
+    lower_y1 = y1 + int(h_box * 0.60)
+    lower_y2 = y1 + int(h_box * 0.85)
+    uh, us = _dominant_hs(bgr, upper_y1, upper_y2, x1, x2)
+    lh, ls = _dominant_hs(bgr, lower_y1, lower_y2, x1, x2)
+    return feat, (uh, us, lh, ls)
 
 
 def cosine_sim(a: "np.ndarray", b: "np.ndarray") -> float:
@@ -346,7 +379,15 @@ class TeamCalibrator:
         self.clustered = True
         cnt0 = int(np.sum(self.cluster_labels_raw == 0))
         cnt1 = int(np.sum(self.cluster_labels_raw == 1))
-        print(f"  [팀구분 1단계] 클러스터 완료: cluster0={cnt0} cluster1={cnt1}")
+        # 실루엣 스코어
+        try:
+            from sklearn.metrics import silhouette_score as _sil
+            sil = float(_sil(feats, self.cluster_labels_raw))
+        except Exception:
+            sil = 0.0
+        self.silhouette_score = sil
+        warn = " ⚠ 분리 불량" if sil < 0.3 else ""
+        print(f"  [팀구분 1단계] 클러스터 완료: cluster0={cnt0} cluster1={cnt1} | 실루엣={sil:.3f}{warn}")
         return True
 
     def decide_labels(self, home_roster: set, confirmed_map: dict, frame_idx: int = -1) -> bool:
@@ -497,13 +538,17 @@ class TeamCalibrator:
             csv_path = "/workspace/iceiq/output/team_debug.csv"
             with open(csv_path, "w", newline="") as csvf:
                 w = _csv.writer(csvf)
-                w.writerow(["track_id","cluster","team","h_peak","s_peak"])
+                w.writerow(["track_id","cluster","team","upper_h_peak","upper_s_peak","lower_h_peak","lower_s_peak","silhouette"])
+                sil_val = getattr(self, "silhouette_score", 0.0)
                 for i, (feat, tid) in enumerate(self.color_samples):
                     ci = int(self._labels[i])
                     team = self.team_labels.get(ci, "UNKNOWN")
-                    h_peak = int(np.argmax(feat[:32]) * 180 / 32)
-                    s_peak = int(np.argmax(feat[32:]) * 256 / 32)
-                    w.writerow([tid, ci, team, h_peak, s_peak])
+                    # 192차원: 상체 96 + 하체 96
+                    uh_peak = int(np.argmax(feat[:32]) * 180 / 32)
+                    us_peak = int(np.argmax(feat[32:64]) * 256 / 32)
+                    lh_peak = int(np.argmax(feat[96:128]) * 180 / 32) if len(feat) > 96 else 0
+                    ls_peak = int(np.argmax(feat[128:160]) * 256 / 32) if len(feat) > 128 else 0
+                    w.writerow([tid, ci, team, uh_peak, us_peak, lh_peak, ls_peak, round(sil_val,3)])
             print(f"  디버그 CSV: {csv_path} ({len(self.color_samples)}행)")
         except Exception as e:
             print(f"  CSV 저장 실패: {e}")
@@ -531,6 +576,8 @@ class TeamCalibrator:
             h_peak = int(np.argmax(h_hist) * 180 / 32)  # 대략적 H값
             s_peak = int(np.argmax(s_hist) * 256 / 32)  # 대략적 S값
             lines.append(f"  {label}: H≈{h_peak}° S≈{s_peak}  (cluster {ci})")
+        sil = getattr(self, 'silhouette_score', 0.0)
+        lines.append(f"  실루엣 스코어: {sil:.3f}{'  ⚠' if sil < 0.3 else ''}")
         lines.append(f"  심판/기타 필터링: {self.referee_filtered}건")
         return "\n".join(lines)
 
