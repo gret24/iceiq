@@ -194,6 +194,98 @@ class PlayerColorProfiles:
             lines.append(f"    #{num} {t} ({p['count']}회)")
         return "\n".join(lines) if lines else "    (없음)"
 
+
+# ── 행동 패턴 유틸리티 ────────────────────────────────────────
+
+from collections import deque as _deque
+import math as _math
+
+def extract_skating_features(bbox_seq: list) -> "np.ndarray | None":
+    """
+    bbox 시퀀스 (최소 5프레임) → 스케이팅 특징 4차원 벡터
+    a) stride_length   : 중심점 이동거리 평균
+    b) speed_variance  : 이동거리 분산
+    c) posture_ratio   : h/w 비율 평균
+    d) width_variance  : bbox 너비 분산
+    """
+    if len(bbox_seq) < 5:
+        return None
+    cx = [(b[0]+b[2])/2 for b in bbox_seq]
+    cy = [(b[1]+b[3])/2 for b in bbox_seq]
+    ws = [b[2]-b[0] for b in bbox_seq]
+    hs = [b[3]-b[1] for b in bbox_seq]
+
+    dists = [_math.hypot(cx[i]-cx[i-1], cy[i]-cy[i-1]) for i in range(1, len(cx))]
+    stride_length  = float(np.mean(dists)) if dists else 0.0
+    speed_variance = float(np.var(dists))  if dists else 0.0
+    ratios = [h/w if w > 0 else 0 for h, w in zip(hs, ws)]
+    posture_ratio  = float(np.mean(ratios))
+    width_variance = float(np.var(ws))
+
+    return np.array([stride_length, speed_variance, posture_ratio, width_variance],
+                    dtype=np.float32)
+
+
+def behavior_similarity(f1: "np.ndarray", f2: "np.ndarray") -> float:
+    """
+    0~1 정규화 후 유클리드 거리 기반 유사도
+    유사도 = 1 - dist / max_dist
+    """
+    if f1 is None or f2 is None:
+        return 0.0
+    # 각 특징을 0~1로 정규화 (최대 기대값으로 나눔)
+    max_vals = np.array([100.0, 500.0, 4.0, 2000.0], dtype=np.float32)
+    n1 = np.clip(f1 / max_vals, 0, 1)
+    n2 = np.clip(f2 / max_vals, 0, 1)
+    dist = np.linalg.norm(n1 - n2)
+    max_dist = _math.sqrt(len(f1))  # 최대 유클리드 거리
+    return max(0.0, 1.0 - dist / max_dist)
+
+
+class PlayerBehaviorProfiles:
+    """선수별 스케이팅 특징 프로필 (running average)"""
+
+    def __init__(self):
+        self._profiles: dict[str, dict] = {}
+
+    def update(self, jersey_num: str, feat: "np.ndarray"):
+        if feat is None:
+            return
+        if jersey_num not in self._profiles:
+            self._profiles[jersey_num] = {"feat": feat.copy(), "count": 1, "trusted": False}
+        else:
+            p = self._profiles[jersey_num]
+            n = p["count"]
+            p["feat"] = (p["feat"] * n + feat) / (n + 1)
+            p["count"] = n + 1
+            if p["count"] >= 5:
+                p["trusted"] = True
+
+    def match(self, feat: "np.ndarray", threshold: float = 0.70) -> "tuple[str|None, float]":
+        if feat is None:
+            return None, 0.0
+        best_num, best_sim = None, threshold
+        for num, p in self._profiles.items():
+            if not p["trusted"]:
+                continue
+            sim = behavior_similarity(feat, p["feat"])
+            if sim > best_sim:
+                best_sim, best_num = sim, num
+        return best_num, best_sim
+
+    def summary(self) -> str:
+        lines = []
+        for num, p in sorted(self._profiles.items(),
+                              key=lambda x: int(x[0]) if x[0].isdigit() else 999):
+            if not p["trusted"]:
+                continue
+            f = p["feat"]
+            lines.append(
+                f"    #{num}: stride={f[0]:.1f} speed_var={f[1]:.1f} "
+                f"posture={f[2]:.2f} w_var={f[3]:.1f} ({p['count']}회)"
+            )
+        return "\n".join(lines) if lines else "    (없음)"
+
 # ── Step 2: ByteTrack (배치 처리) ─────────────────────────
 def step_track():
     header(2, f"ByteTrack 추적 (배치={BATCH_SIZE})")
@@ -314,7 +406,7 @@ def _easyocr_jersey(reader, crop_arr):
 
 
 # ── Step 3: OCR (프레임 단위 루프 + confirmed 캐시) ──────────
-def step_ocr(all_tracks=None, roster_set: set = None, correction_map: dict = None, color_profiles: 'PlayerColorProfiles | None' = None):
+def step_ocr(all_tracks=None, roster_set: set = None, correction_map: dict = None, color_profiles: 'PlayerColorProfiles | None' = None, behavior_profiles: 'PlayerBehaviorProfiles | None' = None):
     header(3, "등번호 OCR (프레임 루프 + confirmed 캐시)")
 
     if all_tracks is None:
@@ -333,7 +425,10 @@ def step_ocr(all_tracks=None, roster_set: set = None, correction_map: dict = Non
     ocr_calls         = 0
     skip_confirmed    = 0
     roster_corrections = {}  # 보정된 번호별 횟수
-    color_match_count  = 0     # 색상 폴백 식별 횟수
+    color_match_count    = 0   # 색상 폴백 식별 횟수
+    behavior_match_count = 0   # 행동 폴백 식별 횟수
+    combined_match_count = 0   # 색상+행동 결합 매칭 횟수
+    bbox_buffer: dict[int, object] = {}  # track_id → deque(maxlen=10)
     skip_bbox_small   = 0
     skip_edge         = 0
     skip_blur         = 0
@@ -369,6 +464,12 @@ def step_ocr(all_tracks=None, roster_set: set = None, correction_map: dict = Non
             tid = t["track_id"]
             x1, y1, x2, y2 = t["x1"], t["y1"], t["x2"], t["y2"]
             w, h = x2 - x1, y2 - y1
+
+            # bbox 버퍼링
+            if behavior_profiles is not None:
+                if tid not in bbox_buffer:
+                    bbox_buffer[tid] = _deque(maxlen=10)
+                bbox_buffer[tid].append((x1, y1, x2, y2))
 
             # ① confirmed 캐시 히트
             if tid in confirmed_tracks:
@@ -406,17 +507,52 @@ def step_ocr(all_tracks=None, roster_set: set = None, correction_map: dict = Non
             ocr_calls += 1
             result = _easyocr_jersey(reader, crop_arr)
             if not result:
-                # ── 색상 폴백 ────────────────────────────────────
-                if color_profiles is not None:
-                    feat = extract_color_feature(bgr, x1, y1, x2, y2)
-                    matched_num = color_profiles.match(feat)
-                    if matched_num:
+                # ── 폴백: 색상 → 행동 → 결합 ──────────────────────
+                color_feat = extract_color_feature(bgr, x1, y1, x2, y2) \
+                             if color_profiles is not None else None
+                beh_seq    = list(bbox_buffer.get(tid, [])) \
+                             if behavior_profiles is not None else []
+                beh_feat   = extract_skating_features(beh_seq)
+
+                matched_num = None
+                torso = bgr[max(0,y1+int((y2-y1)*0.2)):min(ih,y1+int((y2-y1)*0.65)), x1:x2]
+                team  = "HOME" if torso.size > 0 and np.mean(torso) > 128 else "AWAY"
+
+                # c) 색상 단독 (0.75 이상)
+                if color_profiles is not None and color_feat is not None:
+                    cn = color_profiles.match(color_feat)
+                    if cn:
                         color_match_count += 1
-                        # 참고용으로 jersey_map에 기록 (confirmed 미등록)
-                        if str(tid) not in jersey_map:
-                            torso = bgr[max(0,y1+int((y2-y1)*0.2)):min(ih,y1+int((y2-y1)*0.65)), x1:x2]
-                            team = "HOME" if torso.size > 0 and np.mean(torso) > 128 else "AWAY"
-                            jersey_map[str(tid)] = {"jersey": matched_num, "team": team}
+                        matched_num = cn
+
+                # d) 행동 단독 (0.70 이상)
+                if matched_num is None and behavior_profiles is not None and beh_feat is not None:
+                    bn, bsim = behavior_profiles.match(beh_feat)
+                    if bn:
+                        behavior_match_count += 1
+                        matched_num = bn
+
+                # e) 색상+행동 결합 (0.70 이상)
+                if matched_num is None and color_profiles is not None and behavior_profiles is not None:
+                    if color_feat is not None and beh_feat is not None:
+                        best_comb, best_comb_num = 0.0, None
+                        for pnum in set(list(color_profiles._profiles.keys()) +
+                                        list(behavior_profiles._profiles.keys())):
+                            cp = color_profiles._profiles.get(pnum, {})
+                            bp = behavior_profiles._profiles.get(pnum, {})
+                            if not (cp.get("trusted") or bp.get("trusted")):
+                                continue
+                            c_sim = cosine_sim(color_feat, cp["feat"]) if cp.get("trusted") else 0.0
+                            b_sim = behavior_similarity(beh_feat, bp["feat"]) if bp.get("trusted") else 0.0
+                            combined = c_sim * 0.6 + b_sim * 0.4
+                            if combined >= 0.70 and combined > best_comb:
+                                best_comb, best_comb_num = combined, pnum
+                        if best_comb_num:
+                            combined_match_count += 1
+                            matched_num = best_comb_num
+
+                if matched_num and str(tid) not in jersey_map:
+                    jersey_map[str(tid)] = {"jersey": matched_num, "team": team}
                 continue
 
             num, conf = result
@@ -446,10 +582,14 @@ def step_ocr(all_tracks=None, roster_set: set = None, correction_map: dict = Non
                 entry = {"jersey": num, "team": team}
                 confirmed_tracks[tid]  = entry
                 jersey_map[str(tid)]   = entry
-                # 색상 프로필 학습
+                # 색상 + 행동 프로필 학습
                 if color_profiles is not None:
                     feat = extract_color_feature(bgr, x1, y1, x2, y2)
                     color_profiles.update(num, feat)
+                if behavior_profiles is not None:
+                    bseq = list(bbox_buffer.get(tid, []))
+                    bfeat = extract_skating_features(bseq)
+                    behavior_profiles.update(num, bfeat)
 
         # 진행률 출력 (10% 단위)
         pct = (fi + 1) / total_frames * 100
@@ -490,6 +630,14 @@ def step_ocr(all_tracks=None, roster_set: set = None, correction_map: dict = Non
     print(f"  확정 선수:      {len(confirmed_tracks)}개 track")
     if color_match_count > 0:
         print(f"  색상 폴백 식별: {color_match_count}건")
+    if behavior_match_count > 0:
+        print(f"  행동 폴백 식별: {behavior_match_count}건")
+    if combined_match_count > 0:
+        print(f"  결합 매칭 식별: {combined_match_count}건")
+    if behavior_profiles is not None:
+        trusted_b = sum(1 for p in behavior_profiles._profiles.values() if p["trusted"])
+        print(f"  행동 프로필:    {len(behavior_profiles._profiles)}개 선수 ({trusted_b}개 신뢰)")
+        print(behavior_profiles.summary())
     if color_profiles is not None:
         trusted = sum(1 for p in color_profiles._profiles.values() if p["trusted"])
         print(f"  색상 프로필:    {len(color_profiles._profiles)}개 선수 ({trusted}개 신뢰)")
@@ -694,8 +842,10 @@ def main():
         if r_set:
             print(f"  로스터: {sorted(r_set, key=lambda x: int(x) if x.isdigit() else 0)}")
             print(f"  보정맵: {len(c_map)}개 패턴")
-        color_profiles = PlayerColorProfiles()
-        jersey_map = step_ocr(all_tracks, roster_set=r_set, correction_map=c_map, color_profiles=color_profiles)
+        color_profiles    = PlayerColorProfiles()
+        behavior_profiles = PlayerBehaviorProfiles()
+        jersey_map = step_ocr(all_tracks, roster_set=r_set, correction_map=c_map,
+                              color_profiles=color_profiles, behavior_profiles=behavior_profiles)
     else:
         print("[3] OCR 건너뜀")
         with open(JERSEY_JSON) as f:
