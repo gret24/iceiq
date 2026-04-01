@@ -182,8 +182,19 @@ def run_pipeline(video_path, target_num, team_filter=None, gap_frames=20, buf=3.
                     1 for fts in all_tracks.values()
                     if any(t["track_id"] == tid_int for t in fts)
                 )
-                if frame_count >= 3:
+                if frame_count >= 10:  # 10프레임 이상만 신뢰
                     confirmed_ids.add(tid_str)
+
+    # 최대 15개 track만 사용 (frame_count 상위)
+    if len(confirmed_ids) > 15:
+        with_counts = []
+        for tid_str in confirmed_ids:
+            tid_int = int(tid_str)
+            fc = sum(1 for fts in all_tracks.values()
+                     if any(t["track_id"] == tid_int for t in fts))
+            with_counts.append((tid_str, fc))
+        with_counts.sort(key=lambda x: x[1], reverse=True)
+        confirmed_ids = set(t for t, _ in with_counts[:15])
 
     print(f"  jersey_map 확인 Track: {sorted(int(x) for x in confirmed_ids)}")
 
@@ -265,6 +276,10 @@ def run_pipeline(video_path, target_num, team_filter=None, gap_frames=20, buf=3.
                 matched_frames.append(frame_idx)
                 break
 
+            # confirmed_ids에 없는 track은 OCR/특징 매칭 스킵
+            if tid not in confirmed_ids:
+                continue
+
             # 팀 필터
             if team_filter:
                 team = get_team_color(bgr, x1, y1, x2, y2)
@@ -300,10 +315,7 @@ def run_pipeline(video_path, target_num, team_filter=None, gap_frames=20, buf=3.
                             confused_blocked += 1
                             continue
 
-                # new_confirmed 확장 제한: 초기 confirmed_ids에 속한 track만 영구 등록
-                # 새 track은 이 프레임만 기록 (눈덩이 방지)
-                if tid in confirmed_ids:
-                    new_confirmed.add(tid)
+                # new_confirmed 확장 완전 차단 - confirmed_ids 기반 프레임만 기록
                 matched_frames.append(frame_idx)
                 break
 
@@ -320,8 +332,6 @@ def run_pipeline(video_path, target_num, team_filter=None, gap_frames=20, buf=3.
                 if feat:
                     best_sim = max(feature_similarity(feat, tf) for tf in target_features)
                     if best_sim >= 0.78:
-                        if tid in confirmed_ids:
-                            new_confirmed.add(tid)
                         matched_frames.append(frame_idx)
                         break
 
