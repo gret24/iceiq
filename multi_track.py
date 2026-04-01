@@ -171,11 +171,19 @@ def run_pipeline(video_path, target_num, team_filter=None, gap_frames=20, buf=3.
         print(f"  ⚠ 혼동 가능 번호: {sorted(confusable)} → 특징 검증 강화")
 
     # ── jersey_map에서 확인된 Track ID 수집
+    # jersey_map에서 확인된 track 수집 + 최소 등장 프레임 필터
     confirmed_ids: set[str] = set()
     for tid_str, info in jersey_map.items():
         if (info["jersey"].lstrip("0") or "0") == norm_target:
             if team_filter is None or info["team"].upper() == team_filter.upper():
-                confirmed_ids.add(tid_str)
+                # 해당 track이 최소 3프레임 이상 등장해야 신뢰
+                tid_int = int(tid_str)
+                frame_count = sum(
+                    1 for fts in all_tracks.values()
+                    if any(t["track_id"] == tid_int for t in fts)
+                )
+                if frame_count >= 3:
+                    confirmed_ids.add(tid_str)
 
     print(f"  jersey_map 확인 Track: {sorted(int(x) for x in confirmed_ids)}")
 
@@ -288,11 +296,14 @@ def run_pipeline(video_path, target_num, team_filter=None, gap_frames=20, buf=3.
 
                     if feat:
                         sim = max(feature_similarity(feat, tf) for tf in target_features)
-                        if sim < 0.5:  # 특징이 너무 다르면 혼동 가능성
+                        if sim < 0.55:
                             confused_blocked += 1
                             continue
 
-                new_confirmed.add(tid)
+                # new_confirmed 확장 제한: 초기 confirmed_ids에 속한 track만 영구 등록
+                # 새 track은 이 프레임만 기록 (눈덩이 방지)
+                if tid in confirmed_ids:
+                    new_confirmed.add(tid)
                 matched_frames.append(frame_idx)
                 break
 
@@ -308,8 +319,9 @@ def run_pipeline(video_path, target_num, team_filter=None, gap_frames=20, buf=3.
 
                 if feat:
                     best_sim = max(feature_similarity(feat, tf) for tf in target_features)
-                    if best_sim >= 0.75:
-                        new_confirmed.add(tid)
+                    if best_sim >= 0.78:
+                        if tid in confirmed_ids:
+                            new_confirmed.add(tid)
                         matched_frames.append(frame_idx)
                         break
 
