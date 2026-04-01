@@ -27,6 +27,7 @@ MIN_BOX_AREA   = 2500
 BLUR_THRESHOLD = 40
 
 sys.path.insert(0, BASE_DIR)
+from roster import Roster, get_roster
 try:
     from feature_extractor_v2 import extract_features, feature_similarity, feature_similarity_breakdown
 except ImportError:
@@ -130,7 +131,7 @@ def make_ocr_crop(img_rgb, x1, y1, x2, y2, iw, ih):
     return img_rgb.crop((cx1, cy1, cx2, cy2))
 
 
-def run_pipeline(video_path, target_num, team_filter=None, gap_frames=20, buf=3.0, out_suffix=None):
+def run_pipeline(video_path, target_num, team_filter=None, gap_frames=20, buf=3.0, out_suffix=None, roster: Roster = None):
     sfx = out_suffix or target_num
     _highlight_path = os.path.join(BASE_DIR, f'highlight_{sfx}.mp4')
     _clips_dir      = os.path.join(BASE_DIR, f'clips_{sfx}')
@@ -157,7 +158,14 @@ def run_pipeline(video_path, target_num, team_filter=None, gap_frames=20, buf=3.
 
     # ── [개선 3] 번호 후보 목록 수집
     candidate_pool = build_candidate_pool(jersey_map, team_filter)
-    print(f"  번호 후보 목록 ({team_filter or '전체'}): {sorted(candidate_pool, key=lambda x: int(x) if x.isdigit() else 0)}")
+    # [로스터] 로스터가 있으면 pool을 로스터 번호로 제한/보강
+    if roster and roster.all_numbers(team_filter):
+        roster_pool = set(roster.all_numbers(team_filter))
+        # jersey_map pool과 교집합 + 로스터 전체 추가
+        candidate_pool = candidate_pool & roster_pool | roster_pool
+        print(f"  번호 후보 목록 (로스터 적용, {team_filter or '전체'}): {sorted(candidate_pool, key=lambda x: int(x) if x.isdigit() else 0)}")
+    else:
+        print(f"  번호 후보 목록 ({team_filter or '전체'}): {sorted(candidate_pool, key=lambda x: int(x) if x.isdigit() else 0)}")
 
     # 혼동 가능 번호 감지
     confusable = set()
@@ -291,11 +299,25 @@ def run_pipeline(video_path, target_num, team_filter=None, gap_frames=20, buf=3.
             # 이 박스에서 인식된 모든 번호
             all_nums = ocr_all_numbers(reader, ocr_crop)
 
-            # [개선 3] 후보 목록으로 검증
+            # [개선 3] 후보 목록으로 검증 + 로스터 보정
             matched_num = None
             for (num, conf) in all_nums:
-                if num == norm_target and conf > 0.1:
-                    matched_num = (num, conf)
+                check_num = num
+                # [로스터] 분리 감지 복원: 단일 숫자가 로스터에 없으면 합치기 시도
+                if roster and not roster.is_valid(num, team_filter):
+                    # 다른 후보들과 합쳐서 로스터 번호 찾기
+                    other_nums = [n for n,c in all_nums if n != num]
+                    if other_nums:
+                        merged = roster.correct_merged([num] + other_nums[:2], team_filter)
+                        if merged:
+                            check_num = merged
+                # [로스터] OCR 결과 보정
+                if roster and check_num != norm_target:
+                    corrected = roster.correct(check_num, team_filter)
+                    if corrected == norm_target:
+                        check_num = norm_target
+                if check_num == norm_target and conf > 0.1:
+                    matched_num = (check_num, conf)
                     break
 
             if matched_num:
@@ -424,10 +446,26 @@ def main():
     parser.add_argument("--gap",  type=int,   default=10)
     parser.add_argument("--buf",  type=float, default=3.0)
     parser.add_argument("--out",  type=str,   default=None, help="출력 파일 suffix (기본: 번호)")
+    parser.add_argument("--roster", type=str, default=None, help="로스터 JSON 파일 경로")
+    parser.add_argument("--home-roster", type=str, default=None, help="HOME 로스터 번호 (쉼표구분, 예: 2,4,14,47)")
+    parser.add_argument("--away-roster", type=str, default=None, help="AWAY 로스터 번호 (쉼표구분)")
     args = parser.parse_args()
 
+    # 로스터 설정
+    roster = None
+    if args.roster:
+        roster = Roster.load(args.roster)
+        print(f"  로스터 로드: {args.roster}")
+    elif args.home_roster or args.away_roster:
+        home_list = [int(x) for x in args.home_roster.split(",") if x.strip()] if args.home_roster else []
+        away_list = [int(x) for x in args.away_roster.split(",") if x.strip()] if args.away_roster else []
+        roster = Roster(home=home_list, away=away_list)
+        print(f"  로스터 설정: HOME={home_list}, AWAY={away_list}")
+    else:
+        roster = get_roster()  # 기본 roster.json 로드
+
     video_path = os.path.join(BASE_DIR, args.video) if not os.path.isabs(args.video) else args.video
-    run_pipeline(video_path, args.number, args.team, args.gap, args.buf, args.out)
+    run_pipeline(video_path, args.number, args.team, args.gap, args.buf, args.out, roster)
 
 
 if __name__ == "__main__":
