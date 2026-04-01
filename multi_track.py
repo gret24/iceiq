@@ -27,7 +27,10 @@ MIN_BOX_AREA   = 3000
 BLUR_THRESHOLD = 40
 
 sys.path.insert(0, BASE_DIR)
-from feature_extractor import extract_features, feature_similarity
+try:
+    from feature_extractor_v2 import extract_features, feature_similarity, feature_similarity_breakdown
+except ImportError:
+    from feature_extractor import extract_features, feature_similarity
 
 
 def header(label):
