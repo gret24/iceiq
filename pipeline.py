@@ -36,6 +36,11 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance
 from ultralytics import YOLO
 
+try:
+    from roster_manager import RosterManager as _RosterManager
+except ImportError:
+    _RosterManager = None
+
 # ── 경로 ──────────────────────────────────────────────────
 BASE_DIR        = os.path.dirname(os.path.abspath(__file__))
 FRAMES_DIR      = os.path.join(BASE_DIR, "frames")
@@ -49,6 +54,7 @@ HIGHLIGHT_PATH  = os.path.join(BASE_DIR, "highlight.mp4")
 HIGHLIGHT_OLD   = os.path.join(BASE_DIR, "highlight_old.mp4")
 
 EXTRACT_FPS  = 4          # 프레임 추출 FPS (정확도 향상)
+_rm_instance = None       # RosterManager 전역 인스턴스
 MIN_BOX_AREA = 3000       # 너무 작은 bbox 무시
 TRACK_BUFFER = 30         # 선수 안 보여도 유지할 프레임 수 (추출 기준)
 BLUR_THRESHOLD = 50       # 라플라시안 분산 이 이하면 블러 프레임으로 스킵
@@ -120,6 +126,7 @@ def step_extract(input_file: str):
 
 def step_track():
     header(2, "ByteTrack 추적 시작...")
+    global _rm_instance
     os.makedirs(DETECTED_DIR, exist_ok=True)
 
     model = YOLO("yolov8n.pt")
@@ -172,6 +179,12 @@ def step_track():
                 total_det += 1
 
         all_tracks[filename] = frame_tracks
+        # [RosterManager] bbox 버퍼 누적
+        if _rm_instance is not None:
+            fm = re.search(r'(\d+)', filename)
+            fidx = int(fm.group(1)) if fm else 0
+            for t in frame_tracks:
+                _rm_instance.buffer_bbox(t["track_id"], (t["x1"],t["y1"],t["x2"],t["y2"]), fidx)
 
         # 어노테이션 이미지 저장
         img  = Image.open(path).convert("RGB")
@@ -340,7 +353,7 @@ def _claude_jersey(claude_client, crop_img: Image.Image) -> str | None:
     return None
 
 
-def step_ocr(all_tracks: dict | None = None):
+def step_ocr(all_tracks: dict | None = None, roster_mgr=None):
     header(3, "등번호 인식 중... (EasyOCR + Claude Vision 보조)")
 
     if all_tracks is None:
@@ -444,6 +457,21 @@ def step_ocr(all_tracks: dict | None = None):
                     continue  # 신뢰도 낮은 1자리는 스킵
 
             team_str = recognized[1] if recognized else "UNKNOWN"
+
+            # [RosterManager] OCR 번호 보정 (분리인식 복원 등)
+            if roster_mgr is not None:
+                best_conf = max(vote_map.values()) if vote_map else 0.0
+                corrected = roster_mgr.identify_player(
+                    track_id=tid,
+                    frame_idx=0,
+                    ocr_text=best_num,
+                    ocr_confidence=best_conf,
+                    color_features={},
+                    team=team_str
+                )
+                if corrected:
+                    best_num = corrected
+
             jersey_map[str(tid)] = {"jersey": best_num, "team": team_str}
             found += 1
             easyocr_hit += 1
@@ -692,6 +720,8 @@ def main():
     parser.add_argument("--skip-ocr",     action="store_true", help="등번호 OCR 건너뜀")
     parser.add_argument("--mode",         choices=["highlight", "fulltime"], default="highlight",
                         help="highlight: 등장 구간만 추출 (기본) / fulltime: 첫~마지막 등장 전체 구간")
+    parser.add_argument("--home-roster",  type=str, default="", help="HOME 로스터 번호 (쉼표구분, 예: 2,4,14,47)")
+    parser.add_argument("--away-roster",  type=str, default="", help="AWAY 로스터 번호 (쉼표구분)")
     args = parser.parse_args()
 
     input_file = os.path.join(BASE_DIR, args.input) if not os.path.isabs(args.input) else args.input
@@ -706,6 +736,18 @@ def main():
     print(f"  모드: {args.mode}  track_buffer={TRACK_BUFFER}프레임  추출fps={EXTRACT_FPS}")
     print(f"{'#'*45}")
 
+    # RosterManager 초기화
+    global _rm_instance
+    _rm_instance = None
+    roster_mgr = None
+    if _RosterManager is not None and (args.home_roster or args.away_roster):
+        home_list = [int(x.strip()) for x in args.home_roster.split(",") if x.strip().isdigit()]
+        away_list = [int(x.strip()) for x in args.away_roster.split(",") if x.strip().isdigit()]
+        roster_mgr = _RosterManager()
+        roster_mgr.set_roster(home=home_list, away=away_list)
+        _rm_instance = roster_mgr
+        print(f"  RosterManager: HOME={home_list} AWAY={away_list}")
+
     if not args.skip_extract:
         step_extract(input_file)
 
@@ -715,7 +757,7 @@ def main():
 
     jersey_map = None
     if not args.skip_ocr:
-        jersey_map = step_ocr(all_tracks)
+        jersey_map = step_ocr(all_tracks, roster_mgr=roster_mgr)
 
     if args.mode == "fulltime":
         clip_files = step_clips_fulltime(input_file, args.number, args.team, args.fps, args.buffer)
@@ -727,6 +769,14 @@ def main():
     print(f"\n{'#'*45}")
     print(f"  완료! highlight.mp4 생성됨")
     print(f"  클립: {len(clip_files)}개  |  소요시간: {elapsed/60:.1f}분")
+
+    # RosterManager 통계 출력
+    if roster_mgr is not None:
+        profiles = roster_mgr._profiles
+        if profiles:
+            print(f"\n  [RosterManager] 등록된 선수 프로필: {len(profiles)}개")
+            for key, p in sorted(profiles.items()):
+                print(f"    #{p.jersey_number} ({p.team}) | 색상학습: {p._color_count}회 | 스케이팅: {'있음' if p.skating_signature else '없음'}")
     print(f"{'#'*45}\n")
 
 
