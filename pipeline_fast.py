@@ -119,6 +119,81 @@ def _correct_ice_glare(img_path: str) -> np.ndarray | None:
     return cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
 
 
+
+# ── 색상 특징 유틸리티 ────────────────────────────────────────
+
+def extract_color_feature(bgr: "np.ndarray", x1: int, y1: int,
+                           x2: int, y2: int) -> "np.ndarray | None":
+    """
+    선수 bbox 상단 1/3 영역의 HSV 히스토그램 (64차원 정규화 벡터)
+    H 32bins + S 32bins
+    """
+    h_box = y2 - y1
+    if h_box < 10:
+        return None
+    # 상단 1/3 영역 (유니폼 가슴/등)
+    ty1 = max(0, y1)
+    ty2 = max(0, y1 + h_box // 3)
+    region = bgr[ty1:ty2, max(0, x1):min(bgr.shape[1], x2)]
+    if region.size == 0:
+        return None
+    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+    h_hist = cv2.calcHist([hsv], [0], None, [32], [0, 180])
+    s_hist = cv2.calcHist([hsv], [1], None, [32], [0, 256])
+    feat = np.concatenate([h_hist, s_hist]).flatten().astype(np.float32)
+    norm = np.linalg.norm(feat)
+    return feat / norm if norm > 0 else None
+
+
+def cosine_sim(a: "np.ndarray", b: "np.ndarray") -> float:
+    """코사인 유사도"""
+    return float(np.dot(a, b))  # 이미 정규화된 벡터 가정
+
+
+class PlayerColorProfiles:
+    """선수별 색상 특징 프로필 (running average)"""
+
+    def __init__(self):
+        self._profiles: dict[str, dict] = {}  # jersey_num → {feat, count, trusted}
+
+    def update(self, jersey_num: str, feat: "np.ndarray"):
+        if feat is None:
+            return
+        if jersey_num not in self._profiles:
+            self._profiles[jersey_num] = {"feat": feat.copy(), "count": 1, "trusted": False}
+        else:
+            p = self._profiles[jersey_num]
+            n = p["count"]
+            # running average
+            p["feat"] = (p["feat"] * n + feat) / (n + 1)
+            norm = np.linalg.norm(p["feat"])
+            if norm > 0:
+                p["feat"] /= norm
+            p["count"] = n + 1
+            if p["count"] >= 3:
+                p["trusted"] = True
+
+    def match(self, feat: "np.ndarray", threshold: float = 0.75) -> "str | None":
+        """신뢰 가능한 프로필과 코사인 유사도 비교, 최고 매칭 반환"""
+        if feat is None:
+            return None
+        best_num, best_sim = None, threshold
+        for num, p in self._profiles.items():
+            if not p["trusted"]:
+                continue
+            sim = cosine_sim(feat, p["feat"])
+            if sim > best_sim:
+                best_sim, best_num = sim, num
+        return best_num
+
+    def summary(self) -> str:
+        lines = []
+        for num, p in sorted(self._profiles.items(),
+                              key=lambda x: int(x[0]) if x[0].isdigit() else 999):
+            t = "✓" if p["trusted"] else "·"
+            lines.append(f"    #{num} {t} ({p['count']}회)")
+        return "\n".join(lines) if lines else "    (없음)"
+
 # ── Step 2: ByteTrack (배치 처리) ─────────────────────────
 def step_track():
     header(2, f"ByteTrack 추적 (배치={BATCH_SIZE})")
@@ -239,7 +314,7 @@ def _easyocr_jersey(reader, crop_arr):
 
 
 # ── Step 3: OCR (프레임 단위 루프 + confirmed 캐시) ──────────
-def step_ocr(all_tracks=None, roster_set: set = None, correction_map: dict = None):
+def step_ocr(all_tracks=None, roster_set: set = None, correction_map: dict = None, color_profiles: 'PlayerColorProfiles | None' = None):
     header(3, "등번호 OCR (프레임 루프 + confirmed 캐시)")
 
     if all_tracks is None:
@@ -258,6 +333,7 @@ def step_ocr(all_tracks=None, roster_set: set = None, correction_map: dict = Non
     ocr_calls         = 0
     skip_confirmed    = 0
     roster_corrections = {}  # 보정된 번호별 횟수
+    color_match_count  = 0     # 색상 폴백 식별 횟수
     skip_bbox_small   = 0
     skip_edge         = 0
     skip_blur         = 0
@@ -330,6 +406,17 @@ def step_ocr(all_tracks=None, roster_set: set = None, correction_map: dict = Non
             ocr_calls += 1
             result = _easyocr_jersey(reader, crop_arr)
             if not result:
+                # ── 색상 폴백 ────────────────────────────────────
+                if color_profiles is not None:
+                    feat = extract_color_feature(bgr, x1, y1, x2, y2)
+                    matched_num = color_profiles.match(feat)
+                    if matched_num:
+                        color_match_count += 1
+                        # 참고용으로 jersey_map에 기록 (confirmed 미등록)
+                        if str(tid) not in jersey_map:
+                            torso = bgr[max(0,y1+int((y2-y1)*0.2)):min(ih,y1+int((y2-y1)*0.65)), x1:x2]
+                            team = "HOME" if torso.size > 0 and np.mean(torso) > 128 else "AWAY"
+                            jersey_map[str(tid)] = {"jersey": matched_num, "team": team}
                 continue
 
             num, conf = result
@@ -359,6 +446,10 @@ def step_ocr(all_tracks=None, roster_set: set = None, correction_map: dict = Non
                 entry = {"jersey": num, "team": team}
                 confirmed_tracks[tid]  = entry
                 jersey_map[str(tid)]   = entry
+                # 색상 프로필 학습
+                if color_profiles is not None:
+                    feat = extract_color_feature(bgr, x1, y1, x2, y2)
+                    color_profiles.update(num, feat)
 
         # 진행률 출력 (10% 단위)
         pct = (fi + 1) / total_frames * 100
@@ -397,6 +488,12 @@ def step_ocr(all_tracks=None, roster_set: set = None, correction_map: dict = Non
         reduction = (total_skip) / total_attempts * 100
         print(f"  OCR 감소율:     {reduction:.1f}%")
     print(f"  확정 선수:      {len(confirmed_tracks)}개 track")
+    if color_match_count > 0:
+        print(f"  색상 폴백 식별: {color_match_count}건")
+    if color_profiles is not None:
+        trusted = sum(1 for p in color_profiles._profiles.values() if p["trusted"])
+        print(f"  색상 프로필:    {len(color_profiles._profiles)}개 선수 ({trusted}개 신뢰)")
+        print(color_profiles.summary())
     if roster_corrections:
         total_corr = sum(roster_corrections.values())
         print(f"  로스터 보정:    {total_corr}건  {roster_corrections}")
@@ -597,7 +694,8 @@ def main():
         if r_set:
             print(f"  로스터: {sorted(r_set, key=lambda x: int(x) if x.isdigit() else 0)}")
             print(f"  보정맵: {len(c_map)}개 패턴")
-        jersey_map = step_ocr(all_tracks, roster_set=r_set, correction_map=c_map)
+        color_profiles = PlayerColorProfiles()
+        jersey_map = step_ocr(all_tracks, roster_set=r_set, correction_map=c_map, color_profiles=color_profiles)
     else:
         print("[3] OCR 건너뜀")
         with open(JERSEY_JSON) as f:
