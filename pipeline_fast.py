@@ -164,106 +164,155 @@ def _easyocr_jersey(reader, crop_arr):
     return best
 
 
-# ── Step 3: OCR (스킵 로직 + GPU) ──────────────────────────
+# ── Step 3: OCR (프레임 단위 루프 + confirmed 캐시) ──────────
 def step_ocr(all_tracks=None):
-    header(3, "등번호 OCR (스킵 최적화 + GPU)")
+    header(3, "등번호 OCR (프레임 루프 + confirmed 캐시)")
 
     if all_tracks is None:
         with open(TRACKS_JSON) as f:
             all_tracks = json.load(f)
 
-    # GPU EasyOCR
-    reader = easyocr.Reader(['en'], gpu=True, verbose=False)
+    reader = easyocr.Reader(["en"], gpu=True, verbose=False)
 
-    # track_id → 등장 프레임 목록
-    track_frames = {}
-    for fname in sorted(all_tracks.keys()):
-        for t in all_tracks[fname]:
-            tid = t["track_id"]
-            if tid not in track_frames:
-                track_frames[tid] = []
-            track_frames[tid].append((fname, t))
+    # ── 캐시 구조 ─────────────────────────────────────────────
+    confirmed_tracks  = {}   # track_id → {"jersey": num, "team": team}
+    pending_tracks    = {}   # track_id → {번호: 횟수}
+    jersey_map        = {}
 
-    total = len(track_frames)
-    jersey_map = {}
-    ocr_done = 0
-    ocr_skipped = 0
+    # ── 통계 ─────────────────────────────────────────────────
+    total_detections  = 0
+    ocr_calls         = 0
+    skip_confirmed    = 0
+    skip_bbox_small   = 0
+    skip_edge         = 0
+    skip_blur         = 0
     t0 = time.time()
 
-    # [개선 2] 확인된 track 재사용: track_id가 이미 인식된 번호 캐시
-    confirmed_cache = {}  # track_id → jersey번호
+    frames_sorted = sorted(all_tracks.keys())
+    total_frames  = len(frames_sorted)
 
-    for i, (tid, frame_list) in enumerate(sorted(track_frames.items()), 1):
-        # [개선 2] 이미 확인된 track이면 OCR 스킵
-        if tid in confirmed_cache:
-            jersey_map[str(tid)] = confirmed_cache[tid]
-            ocr_skipped += 1
+    for fi, fname in enumerate(frames_sorted):
+        frame_tracks = all_tracks[fname]
+        if not frame_tracks:
             continue
 
-        recognized = None
-        vote_map = {}
+        path = os.path.join(FRAMES_DIR, fname)
+        if not os.path.exists(path):
+            continue
 
-        for filename, track in frame_list[:15]:  # 최대 15프레임 시도
-            x1, y1, x2, y2 = track["x1"], track["y1"], track["x2"], track["y2"]
-            w, h = x2-x1, y2-y1
-            if w*h <= MIN_BOX_AREA: continue
+        bgr  = cv2.imread(path)
+        if bgr is None:
+            continue
+        ih, iw = bgr.shape[:2]
 
-            path = os.path.join(FRAMES_DIR, filename)
-            gray = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
-            if gray is None: continue
-            if cv2.Laplacian(gray, cv2.CV_64F).var() < BLUR_THRESHOLD: continue
+        # 블러 체크 (프레임 단위)
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        if cv2.Laplacian(gray, cv2.CV_64F).var() < BLUR_THRESHOLD:
+            skip_blur += len(frame_tracks)
+            continue
 
-            img = Image.open(path).convert("RGB")
-            iw, ih = img.size
-            ny1 = y1 + int(h*0.15); ny2 = y1 + int(h*0.70)
-            crop = img.crop((max(0,x1), max(0,ny1), min(iw,x2), min(ih,ny2)))
+        img_pil = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
+
+        for t in frame_tracks:
+            total_detections += 1
+            tid = t["track_id"]
+            x1, y1, x2, y2 = t["x1"], t["y1"], t["x2"], t["y2"]
+            w, h = x2 - x1, y2 - y1
+
+            # ① confirmed 캐시 히트
+            if tid in confirmed_tracks:
+                skip_confirmed += 1
+                continue
+
+            # ② bbox 너무 작음
+            if w * h <= MIN_BOX_AREA:
+                continue
+
+            # ③ bbox 높이 50px 미만
+            if h < 50:
+                skip_bbox_small += 1
+                continue
+
+            # ④ 화면 가장자리 (상하좌우 10%)
+            edge_x = iw * 0.10
+            edge_y = ih * 0.10
+            if x1 < edge_x or x2 > iw - edge_x or y1 < edge_y or y2 > ih - edge_y:
+                skip_edge += 1
+                continue
+
+            # ── OCR 시도 ─────────────────────────────────────
+            ny1 = y1 + int(h * 0.15)
+            ny2 = y1 + int(h * 0.70)
+            crop = img_pil.crop((max(0, x1), max(0, ny1),
+                                  min(iw, x2), min(ih, ny2)))
             cw, ch = crop.size
-            if cw < 5 or ch < 5: continue
-            big = crop.resize((cw*2,ch*2), Image.LANCZOS)
+            if cw < 5 or ch < 5:
+                continue
+            big = crop.resize((cw * 2, ch * 2), Image.LANCZOS)
             big = ImageEnhance.Contrast(big).enhance(2.0)
             crop_arr = np.array(big)
 
-            torso = np.array(img)[y1+int(h*0.2):y1+int(h*0.65), x1:x2]
-            team = "HOME" if torso.size>0 and np.mean(torso)>128 else "AWAY"
-
+            ocr_calls += 1
             result = _easyocr_jersey(reader, crop_arr)
-            if result:
-                num, conf = result
-                vote_map[num] = vote_map.get(num, 0) + conf
-                if not recognized:
-                    recognized = (num, team)
+            if not result:
+                continue
 
-            if len(vote_map) > 0 and sum(1 for v in vote_map.values() if v>0) >= 3:
-                break  # 3표 이상이면 조기 종료
+            num, conf = result
 
-        # 다수결
-        if vote_map:
-            two_digit = {k:v for k,v in vote_map.items() if len(k)==2}
-            best_num = max(two_digit, key=two_digit.get) if two_digit else None
-            if not best_num:
-                max_conf = max(vote_map.values())
-                if max_conf >= 0.5:
-                    best_num = max(vote_map, key=vote_map.get)
-            if best_num:
-                team_str = recognized[1] if recognized else "UNKNOWN"
-                entry = {"jersey": best_num, "team": team_str}
-                jersey_map[str(tid)] = entry
-                confirmed_cache[tid] = entry
-                ocr_done += 1
+            # ── pending 누적 → confirmed 판단 ────────────────
+            if tid not in pending_tracks:
+                pending_tracks[tid] = {}
+            pending_tracks[tid][num] = pending_tracks[tid].get(num, 0) + 1
 
-        if i % 50 == 0 or i == total:
-            elapsed = time.time()-t0
-            fps_t = i/elapsed
-            remain = (total-i)/fps_t if fps_t>0 else 0
-            print(f"  {i}/{total} ({i/total*100:.0f}%) | OCR: {ocr_done} | 스킵: {ocr_skipped} | 남은: {remain/60:.1f}분")
+            if pending_tracks[tid][num] >= 2:
+                # 팀 판별
+                torso = bgr[max(0, y1+int(h*0.2)):min(ih, y1+int(h*0.65)), x1:x2]
+                team  = "HOME" if torso.size > 0 and np.mean(torso) > 128 else "AWAY"
+                entry = {"jersey": num, "team": team}
+                confirmed_tracks[tid]  = entry
+                jersey_map[str(tid)]   = entry
+
+        # 진행률 출력 (10% 단위)
+        pct = (fi + 1) / total_frames * 100
+        if int(pct) % 10 == 0 and int(pct) > int(fi / total_frames * 100):
+            elapsed = time.time() - t0
+            confirmed_cnt = len(confirmed_tracks)
+            print(f"  처리: {fi+1}/{total_frames} ({pct:.0f}%) | "
+                  f"OCR호출: {ocr_calls} | 확정: {confirmed_cnt} | "
+                  f"경과: {elapsed/60:.1f}분")
+
+    # pending 중 미확정인 것도 jersey_map에 추가 (1회 인식된 것)
+    for tid, votes in pending_tracks.items():
+        if tid in confirmed_tracks:
+            continue
+        if votes:
+            two_digit = {k: v for k, v in votes.items() if len(k) == 2}
+            best = max(two_digit, key=two_digit.get) if two_digit else max(votes, key=votes.get)
+            bgr_path = os.path.join(FRAMES_DIR, frames_sorted[0])
+            jersey_map[str(tid)] = {"jersey": best, "team": "UNKNOWN"}
 
     with open(JERSEY_JSON, "w") as f:
         json.dump(jersey_map, f, ensure_ascii=False)
 
-    elapsed = time.time()-t0
-    print(f"\n  → 완료: {total}개 Track | OCR {ocr_done}건 | 스킵 {ocr_skipped}건 | {elapsed/60:.1f}분")
-    print(f"     스킵률: {ocr_skipped/total*100:.1f}%")
+    elapsed = time.time() - t0
+    total_skip = skip_confirmed + skip_bbox_small + skip_edge
+    total_attempts = ocr_calls + total_skip
+
+    print(f"\n  ─── OCR 통계 ───────────────────────────────")
+    print(f"  총 detection:   {total_detections:,}건")
+    print(f"  OCR 실제 호출:  {ocr_calls:,}건")
+    print(f"  캐시 히트:      {skip_confirmed:,}건  (confirmed 스킵)")
+    print(f"  bbox 작음 스킵: {skip_bbox_small:,}건  (h<50px)")
+    print(f"  가장자리 스킵:  {skip_edge:,}건  (10% 경계)")
+    print(f"  블러 스킵:      {skip_blur:,}건  (프레임)")
+    if total_attempts > 0:
+        reduction = (total_skip) / total_attempts * 100
+        print(f"  OCR 감소율:     {reduction:.1f}%")
+    print(f"  확정 선수:      {len(confirmed_tracks)}개 track")
+    print(f"  소요시간:       {elapsed/60:.1f}분")
+    print(f"  ─────────────────────────────────────────────")
     return jersey_map
+
 
 
 
