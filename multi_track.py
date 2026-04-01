@@ -28,6 +28,7 @@ BLUR_THRESHOLD = 40
 
 sys.path.insert(0, BASE_DIR)
 from roster import Roster, get_roster
+from roster_manager import RosterManager
 try:
     from feature_extractor_v2 import extract_features, feature_similarity, feature_similarity_breakdown
 except ImportError:
@@ -131,8 +132,16 @@ def make_ocr_crop(img_rgb, x1, y1, x2, y2, iw, ih):
     return img_rgb.crop((cx1, cy1, cx2, cy2))
 
 
-def run_pipeline(video_path, target_num, team_filter=None, gap_frames=20, buf=3.0, out_suffix=None, roster: Roster = None):
+def run_pipeline(video_path, target_num, team_filter=None, gap_frames=20, buf=3.0, out_suffix=None, roster: Roster = None, use_roster_mgr: bool = True):
     sfx = out_suffix or target_num
+    # RosterManager 초기화
+    mgr = RosterManager() if use_roster_mgr else None
+    if mgr and roster:
+        home = [int(n) for n in roster.home if n.isdigit()]
+        away = [int(n) for n in roster.away if n.isdigit()]
+        if home or away:
+            mgr.set_roster(home=home, away=away)
+            print(f"  RosterManager: HOME={home} AWAY={away}")
     _highlight_path = os.path.join(BASE_DIR, f'highlight_{sfx}.mp4')
     _clips_dir      = os.path.join(BASE_DIR, f'clips_{sfx}')
 
@@ -190,11 +199,11 @@ def run_pipeline(video_path, target_num, team_filter=None, gap_frames=20, buf=3.
                     1 for fts in all_tracks.values()
                     if any(t["track_id"] == tid_int for t in fts)
                 )
-                if frame_count >= 10:  # 10프레임 이상만 신뢰
+                if frame_count >= 3:   # 3프레임 이상만 신뢰
                     confirmed_ids.add(tid_str)
 
     # 최대 15개 track만 사용 (frame_count 상위)
-    if len(confirmed_ids) > 15:
+    if len(confirmed_ids) > 30:
         with_counts = []
         for tid_str in confirmed_ids:
             tid_int = int(tid_str)
@@ -202,7 +211,7 @@ def run_pipeline(video_path, target_num, team_filter=None, gap_frames=20, buf=3.
                      if any(t["track_id"] == tid_int for t in fts))
             with_counts.append((tid_str, fc))
         with_counts.sort(key=lambda x: x[1], reverse=True)
-        confirmed_ids = set(t for t, _ in with_counts[:15])
+        confirmed_ids = set(t for t, _ in with_counts[:30])
 
     print(f"  jersey_map 확인 Track: {sorted(int(x) for x in confirmed_ids)}")
 
@@ -284,8 +293,30 @@ def run_pipeline(video_path, target_num, team_filter=None, gap_frames=20, buf=3.
                 matched_frames.append(frame_idx)
                 break
 
-            # confirmed_ids에 없는 track은 OCR/특징 매칭 스킵
+            # confirmed_ids에 없는 track: RosterManager로 색상+행동 식별 시도
             if tid not in confirmed_ids:
+                if mgr:
+                    # bbox 버퍼에 추가
+                    mgr.buffer_bbox(int(tid), (x1,y1,x2,y2), frame_idx)
+                    # 색상 특징 추출 (빠르게 HSV 평균)
+                    torso = np.array(img_rgb)[max(0,y1+int(h*0.1)):min(ih,y1+int(h*0.7)), x1:x2]
+                    if torso.size > 0:
+                        import cv2 as _cv2
+                        hsv = _cv2.cvtColor(torso, _cv2.COLOR_RGB2HSV)
+                        color_f = {
+                            "h_mean": float(np.mean(hsv[:,:,0])),
+                            "s_mean": float(np.mean(hsv[:,:,1])),
+                            "v_mean": float(np.mean(hsv[:,:,2])),
+                        }
+                        identified = mgr.identify_player(
+                            track_id=int(tid), frame_idx=frame_idx,
+                            ocr_text="", ocr_confidence=0.0,
+                            color_features=color_f,
+                            team=team_filter
+                        )
+                        if identified == norm_target:
+                            matched_frames.append(frame_idx)
+                            break
                 continue
 
             # 팀 필터
@@ -337,7 +368,17 @@ def run_pipeline(video_path, target_num, team_filter=None, gap_frames=20, buf=3.
                             confused_blocked += 1
                             continue
 
-                # new_confirmed 확장 완전 차단 - confirmed_ids 기반 프레임만 기록
+                # RosterManager에 색상 학습 (이후 비OCR 프레임에서 재활용)
+                if mgr:
+                    torso = np.array(img_rgb)[max(0,y1+int(h*0.1)):min(ih,y1+int(h*0.7)), x1:x2]
+                    if torso.size > 0:
+                        import cv2 as _cv2
+                        hsv = _cv2.cvtColor(torso, _cv2.COLOR_RGB2HSV)
+                        mgr.register_features(norm_target, team_filter or "UNKNOWN", {
+                            "h_mean": float(np.mean(hsv[:,:,0])),
+                            "s_mean": float(np.mean(hsv[:,:,1])),
+                            "v_mean": float(np.mean(hsv[:,:,2])),
+                        })
                 matched_frames.append(frame_idx)
                 break
 
@@ -465,7 +506,7 @@ def main():
         roster = get_roster()  # 기본 roster.json 로드
 
     video_path = os.path.join(BASE_DIR, args.video) if not os.path.isabs(args.video) else args.video
-    run_pipeline(video_path, args.number, args.team, args.gap, args.buf, args.out, roster)
+    run_pipeline(video_path, args.number, args.team, args.gap, args.buf, args.out, roster, use_roster_mgr=True)
 
 
 if __name__ == "__main__":
