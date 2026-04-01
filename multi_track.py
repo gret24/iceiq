@@ -392,8 +392,7 @@ def run_pipeline(video_path, target_num, team_filter=None, gap_frames=20, buf=3.
 def main():
     parser = argparse.ArgumentParser(
         description="멀티 특징 기반 선수 추적 v2 - 팀 미지정(전체 스캔) 권장",
-        epilog="예시: python3 multi_track.py input_video.mp4 4
-       python3 multi_track.py input_video.mp4 94 --out test_94")
+        epilog="예시: python3 multi_track.py input_video.mp4 4\n       python3 multi_track.py input_video.mp4 94 --out test_94")
     parser.add_argument("video")
     parser.add_argument("number")
     parser.add_argument("team", nargs="?", default=None, help="팀 필터: HOME / AWAY (미입력 시 전체 스캔 - 기본값 권장)")
