@@ -27,6 +27,80 @@ BLUR_THRESHOLD = 50
 BATCH_SIZE  = 8   # 동시 처리 프레임 수
 
 
+# ── 로스터 보정 유틸리티 ─────────────────────────────────────
+
+def build_correction_map(roster: list[str]) -> dict:
+    """
+    로스터 번호 목록에서 분리 인식 보정맵 자동 생성
+    예) 47 → {(4,7):47, (7,4):47}
+         14 → {(1,4):14, (4,1):14}
+    """
+    from itertools import permutations
+    correction_map = {}
+    for num in roster:
+        n = num.lstrip("0") or "0"
+        if len(n) < 2:
+            continue
+        for i in range(1, len(n)):
+            parts = (n[:i], n[i:])
+            for perm in permutations(parts):
+                key = tuple(int(p) for p in perm if p.isdigit())
+                if key not in correction_map:
+                    correction_map[key] = n
+    return correction_map
+
+
+def correct_ocr_with_roster(raw_nums: list[str], roster_set: set,
+                             correction_map: dict,
+                             strict: bool = False) -> str | None:
+    """
+    OCR 인식 숫자 리스트를 로스터 기준으로 보정
+    raw_nums: ["4", "7"] 또는 ["47"] 형태
+    반환: 보정된 번호 문자열 or None
+    """
+    if not raw_nums:
+        return None
+
+    # a) 단일 숫자이고 로스터에 있으면 그대로
+    if len(raw_nums) == 1:
+        n = raw_nums[0].lstrip("0") or "0"
+        if n in roster_set:
+            return n
+        if strict:
+            return None
+        return n  # 로스터 없으면 그대로
+
+    # b) 이어붙여서 로스터 매칭
+    merged = "".join(raw_nums).lstrip("0") or "0"
+    if merged in roster_set:
+        return merged
+
+    # c) correction_map에서 조합 찾기
+    try:
+        key = tuple(int(n) for n in raw_nums if n.isdigit())
+        if key in correction_map:
+            return correction_map[key]
+        # 역순도 시도
+        rkey = tuple(reversed(key))
+        if rkey in correction_map:
+            return correction_map[rkey]
+    except ValueError:
+        pass
+
+    # d) 개별 숫자 중 로스터에 있는 것
+    for n in raw_nums:
+        nn = n.lstrip("0") or "0"
+        if nn in roster_set:
+            return nn
+
+    # e) strict 모드면 None
+    if strict:
+        return None
+    return merged if merged.isdigit() and 1 <= int(merged) <= 99 else None
+
+
+
+
 def header(step, label):
     print(f"\n[{step}] {label}\n" + "-"*45)
 
@@ -165,7 +239,7 @@ def _easyocr_jersey(reader, crop_arr):
 
 
 # ── Step 3: OCR (프레임 단위 루프 + confirmed 캐시) ──────────
-def step_ocr(all_tracks=None):
+def step_ocr(all_tracks=None, roster_set: set = None, correction_map: dict = None):
     header(3, "등번호 OCR (프레임 루프 + confirmed 캐시)")
 
     if all_tracks is None:
@@ -183,6 +257,7 @@ def step_ocr(all_tracks=None):
     total_detections  = 0
     ocr_calls         = 0
     skip_confirmed    = 0
+    roster_corrections = {}  # 보정된 번호별 횟수
     skip_bbox_small   = 0
     skip_edge         = 0
     skip_blur         = 0
@@ -259,6 +334,19 @@ def step_ocr(all_tracks=None):
 
             num, conf = result
 
+            # ── 로스터 보정 ────────────────────────────────────
+            if roster_set or correction_map:
+                # EasyOCR이 여러 숫자를 분리 인식한 경우 대비
+                # result가 단일 번호지만 분리된 경우도 보정
+                raw = [num]
+                corrected = correct_ocr_with_roster(
+                    raw, roster_set or set(),
+                    correction_map or {}, strict=False
+                )
+                if corrected and corrected != num:
+                    roster_corrections[corrected] = roster_corrections.get(corrected, 0) + 1
+                    num = corrected
+
             # ── pending 누적 → confirmed 판단 ────────────────
             if tid not in pending_tracks:
                 pending_tracks[tid] = {}
@@ -309,6 +397,9 @@ def step_ocr(all_tracks=None):
         reduction = (total_skip) / total_attempts * 100
         print(f"  OCR 감소율:     {reduction:.1f}%")
     print(f"  확정 선수:      {len(confirmed_tracks)}개 track")
+    if roster_corrections:
+        total_corr = sum(roster_corrections.values())
+        print(f"  로스터 보정:    {total_corr}건  {roster_corrections}")
     print(f"  소요시간:       {elapsed/60:.1f}분")
     print(f"  ─────────────────────────────────────────────")
     return jersey_map
@@ -497,7 +588,16 @@ def main():
 
     jersey_map = None
     if not args.skip_ocr:
-        jersey_map = step_ocr(all_tracks)
+        # 로스터 파싱
+        home_list = [n.strip() for n in args.home_roster.split(",") if n.strip()]
+        away_list = [n.strip() for n in args.away_roster.split(",") if n.strip()]
+        all_roster = list(set(home_list + away_list))
+        r_set = set(n.lstrip("0") or "0" for n in all_roster) if all_roster else None
+        c_map = build_correction_map(all_roster) if all_roster else None
+        if r_set:
+            print(f"  로스터: {sorted(r_set, key=lambda x: int(x) if x.isdigit() else 0)}")
+            print(f"  보정맵: {len(c_map)}개 패턴")
+        jersey_map = step_ocr(all_tracks, roster_set=r_set, correction_map=c_map)
     else:
         print("[3] OCR 건너뜀")
         with open(JERSEY_JSON) as f:
