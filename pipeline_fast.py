@@ -149,6 +149,35 @@ def extract_color_feature(bgr: "np.ndarray", x1: int, y1: int,
     return feat / norm if norm > 0 else None
 
 
+
+def _get_dominant_hs(bgr, x1, y1, x2, y2):
+    """상체 20~60% 영역에서 S>30, V>30 픽셀의 H/S median (dominant color)"""
+    h_box = y2 - y1
+    ty1 = max(0, y1 + int(h_box * 0.20))
+    ty2 = max(0, y1 + int(h_box * 0.60))
+    region = bgr[ty1:ty2, max(0,x1):min(bgr.shape[1],x2)]
+    if region.size == 0:
+        return None, None
+    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+    mask = (hsv[:,:,1] > 30) & (hsv[:,:,2] > 30)
+    if np.sum(mask) < 5:
+        return None, None
+    return float(np.median(hsv[:,:,0][mask])), float(np.median(hsv[:,:,1][mask]))
+
+
+def _is_goalie_bbox(w, h, frame_w, frame_h):
+    """골리 판별: bbox 면적이 평균보다 1.8배 이상 크거나, 화면 가장자리 near goal"""
+    area = w * h
+    avg_area = 5000  # 일반 선수 평균
+    if area > avg_area * 1.8:
+        return True
+    # 골대 위치 (좌우 끝 8%)
+    cx = (w / 2)
+    if cx < frame_w * 0.08 or cx > frame_w * 0.92:
+        return True
+    return False
+
+
 def cosine_sim(a: "np.ndarray", b: "np.ndarray") -> float:
     """코사인 유사도"""
     return float(np.dot(a, b))  # 이미 정규화된 벡터 가정
@@ -329,6 +358,27 @@ class TeamCalibrator:
             return False
         from sklearn.cluster import KMeans
         feats = np.array([s[0] for s in self.color_samples])
+        # dominant color (H, S median) 기반 2D k-means 병행
+        try:
+            dom_colors = []
+            for feat, tid in self.color_samples:
+                # feat의 H 피크값을 dominant H로 사용
+                h_peak = float(np.argmax(feat[:32]) * 180 / 32)
+                s_peak = float(np.argmax(feat[32:64]) * 256 / 32)
+                dom_colors.append([h_peak, s_peak])
+            dom_arr = np.array(dom_colors, dtype=np.float32)
+            km_dom = KMeans(n_clusters=2, n_init=10, random_state=42)
+            dom_labels = km_dom.fit_predict(dom_arr)
+            # 두 클러스터링 결과 일치율 확인
+            agree = np.mean(dom_labels == km.fit_predict(feats))
+            if agree < 0.5:
+                dom_labels = 1 - dom_labels  # 반전
+            # dominant color 결과를 60%, HSV hist 40% 가중 결합
+            combined = (dom_labels * 0.6 + km.fit_predict(feats) * 0.4).round().astype(int)
+            self.cluster_labels_raw = combined
+        except Exception:
+            pass
+
         km = KMeans(n_clusters=2, n_init=20, random_state=42)
         self.cluster_labels_raw = km.fit_predict(feats)
         self.cluster_centers = km.cluster_centers_
