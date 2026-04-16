@@ -2,7 +2,14 @@
 .env
 .env.*
 
-# 데이터 디렉토리 (대용량)
+# 모델 가중치 (Docker 빌드 시 download_models.py가 자동 다운로드)
+*.pt
+*.pth
+*.pkl
+models/*.pt
+models/*.pth
+
+# 데이터 디렉토리 (서버 런타임 생성 파일 — R2에 별도 저장)
 data/uploads/
 data/results/
 data/highlights/
@@ -14,9 +21,6 @@ __pycache__/
 *.pyo
 *.pyd
 .Python
-
-# 모델 가중치 (대용량 — RunPod 볼륨으로 별도 관리)
-*.pt
 
 # macOS
 .DS_Store
