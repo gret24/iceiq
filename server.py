@@ -1317,6 +1317,112 @@ async def delete_player(filename: str, number: int):
     
     return {"message": "Player removed", "number": number}
 
+@app.post("/api/rosters/{filename}/reapply")
+async def reapply_roster(filename: str):
+    """로스터 변경 후 기존 분석 결과에 이름/포지션 재매핑 (jersey 번호 기준)"""
+    path = ROSTER_DIR / filename
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Roster not found")
+
+    with open(path) as f:
+        roster = json.load(f)
+
+    # jersey → player info 매핑 테이블
+    jersey_map: dict[str, dict] = {}
+    for p in roster.get("players", []):
+        j = str(p.get("jersey") or p.get("number", ""))
+        if j:
+            jersey_map[j] = {
+                "name": p.get("name", ""),
+                "position": p.get("position", ""),
+                "team": p.get("team", ""),
+            }
+
+    if not jersey_map:
+        return {"message": "No players in roster", "updated": 0}
+
+    updated_games: list[str] = []
+    for game_dir in RESULTS_DIR.iterdir():
+        if not game_dir.is_dir():
+            continue
+        # 가능한 통계 파일 패턴
+        for stats_name in ("player_stats.json", "metrics.json", "players.json"):
+            stats_path = game_dir / stats_name
+            if not stats_path.exists():
+                continue
+            try:
+                with open(stats_path) as f:
+                    data = json.load(f)
+                changed = False
+                players_list = data if isinstance(data, list) else data.get("players", [])
+                for p in players_list:
+                    jersey = str(p.get("jersey", p.get("number", "")))
+                    if jersey in jersey_map:
+                        info = jersey_map[jersey]
+                        if info.get("name") and p.get("name", "") != info["name"]:
+                            p["name"] = info["name"]
+                            changed = True
+                        if info.get("position"):
+                            p["position"] = info["position"]
+                            changed = True
+                if changed:
+                    with open(stats_path, "w") as f:
+                        json.dump(data, f, indent=2, ensure_ascii=False)
+                    updated_games.append(game_dir.name)
+                    break
+            except Exception:
+                continue
+
+    return {
+        "message": f"Reapplied roster to {len(updated_games)} game(s)",
+        "updated": len(updated_games),
+        "games": updated_games,
+    }
+
+@app.post("/api/homography/custom")
+async def set_custom_homography(data: dict):
+    """사용자 지정 4개 점으로 호모그래피 행렬 계산 후 저장"""
+    import numpy as np
+    import cv2 as _cv2
+
+    video_stem = data.get("video_stem", "")
+    image_points = data.get("image_points")   # [[x,y], ...]  4개 이상
+    rink_points  = data.get("rink_points")    # [[rx,ry], ...] image_points와 동수
+
+    if not video_stem:
+        raise HTTPException(status_code=400, detail="video_stem required")
+    if not image_points or len(image_points) < 4:
+        raise HTTPException(status_code=400, detail="Need at least 4 image_points")
+    if not rink_points:
+        # 기본값: 600x300 링크 4 코너 (lib/homography.ts 기준)
+        rink_points = [[0, 0], [600, 0], [0, 300], [600, 300]]
+    if len(image_points) != len(rink_points):
+        raise HTTPException(status_code=400, detail="image_points and rink_points must have same length")
+
+    src = np.array(image_points, dtype=np.float32)
+    dst = np.array(rink_points,  dtype=np.float32)
+
+    H, mask = _cv2.findHomography(src, dst, _cv2.RANSAC, 5.0)
+    if H is None:
+        raise HTTPException(status_code=400, detail="Homography calculation failed — check point positions")
+
+    homo_data = {
+        "video_stem": video_stem,
+        "matrix": H.flatten().tolist(),
+        "image_points": image_points,
+        "rink_points": rink_points,
+        "source": "custom_user",
+    }
+    out_path = BASE_DIR / "configs" / f"homography_{video_stem}.json"
+    with open(out_path, "w") as f:
+        json.dump(homo_data, f, indent=2)
+
+    return {
+        "video_stem": video_stem,
+        "matrix": H.flatten().tolist(),
+        "message": "Homography saved",
+    }
+
 # --- Highlights ---
 HIGHLIGHTS_DIR = BASE_DIR / "data" / "highlights"
 HIGHLIGHTS_DIR.mkdir(parents=True, exist_ok=True)
