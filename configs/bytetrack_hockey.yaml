@@ -1,0 +1,11 @@
+# ByteTrack 하키 최적화 설정
+# 문제: 300+ IDs → 목표: ~20 IDs
+# 원인: track_buffer 너무 짧고, new_track_thresh 너무 낮음
+
+tracker_type: bytetrack
+track_high_thresh: 0.50   # 올림 (유령 감지 방지)
+track_low_thresh: 0.20    # 올림
+new_track_thresh: 0.60    # 더 올림 (새 트랙 생성 강하게 억제)
+track_buffer: 120         # 4초 (더 길게)
+match_thresh: 0.65        # 낮춤 (작은 선수 IoU 낮음)
+fuse_score: True

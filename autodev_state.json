@@ -1,0 +1,29 @@
+{
+  "goal_idx": 3,
+  "ms_idx": 0,
+  "done": [
+    "homography",
+    "kalman_kinematics",
+    "heatmap_generation",
+    "smart_jersey_clustering",
+    "smart_jersey_labeling",
+    "accuracy_validation",
+    "puck_detection",
+    "puck_possession",
+    "team_analytics",
+    "event_detection",
+    "scoreboard_ocr",
+    "fatigue_analysis",
+    "pipeline_c_test",
+    "highlight_scoring",
+    "highlight_extraction",
+    "cross_shift_identity",
+    "recruiting_pdf",
+    "pipeline_d_test"
+  ],
+  "iter": 0,
+  "last_result": {
+    "act": "pipeline_d_test",
+    "ok": true
+  }
+}

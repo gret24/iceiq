@@ -1,0 +1,53 @@
+video:
+  fps: 4
+  resolution: [1920, 1080]
+  rink:
+    length: 60.96
+    width: 25.9
+    blue_line_from_end: 19.51
+
+detection:
+  model: yolov8m-pose
+  confidence: 0.5
+  device: mps
+
+tracking:
+  method: botsort
+  reid_model: osnet_x0_25_msmt17
+
+team_classification:
+  method: contrastive
+  burn_in_frames: 500
+
+jersey:
+  method: parseq
+  legibility_threshold: 0.7
+  tracklet_vote: true
+  roster_constraint: true
+
+rosters:
+  team_a:
+    id: aigis
+    path: data/rosters/aigis_waves_g18.yaml
+  team_b:
+    id: lopez
+    path: data/rosters/lopez_waves_g18.yaml
+  ground_truth: data/roster_waves_g18.json  # 라벨링된 crop 데이터
+
+kalman:
+  process_noise: 0.01
+  measurement_noise: 0.06
+
+kinematics:
+  max_speed_ms: 6.1        # 22 km/h — U-12 realistic max
+  player_height_m: 1.40    # U-12 average (was 1.57 NHL adult)
+
+analysis:
+  sprint_threshold_kmh: 16
+  stationary_threshold_kmh: 2
+  speed_window_frames: 5
+
+output:
+  save_trajectories: true
+  save_heatmaps: true
+  save_statistics: true

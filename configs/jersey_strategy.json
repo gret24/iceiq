@@ -1,0 +1,26 @@
+{
+ "strategy": "koshkina_pipeline",
+ "steps": [
+ "1. ViTPose shoulder+hip keypoints -> torso crop (NOT full bbox)",
+ "2. Legibility classifier: skip unreadable frames (save compute)",
+ "3. PARSeq STR (NOT EasyOCR) for digit recognition",
+ "4. Per-frame confidence vector: c1(0..9), c2(0..9)",
+ "5. Tracklet-level log-likelihood aggregation over ALL legible frames",
+ "6. Roster constraint: reject numbers not in roster",
+ "7. On-ice elimination: 5 skaters, identify 4 -> 5th automatic"
+ ],
+ "math": {
+ "single_frame_accuracy": 0.80,
+ "legibility_rate": 0.20,
+ "frames_per_shift_4fps_45sec": 180,
+ "legible_frames_per_shift": 36,
+ "independent_samples_factor": 0.4,
+ "effective_independent_votes": 15,
+ "majority_vote_accuracy": "P(correct) > 0.9999 with 15 votes at 0.80 each",
+ "roster_constraint_boost": "eliminates 80%+ of systematic errors like 47->4",
+ "elimination_boost": "5 players, 4 identified -> 5th = 100%"
+ },
+ "key_insight": "Single frame OCR ceiling is 80%. But tracklet voting over 15+ frames makes effective accuracy 99%+. Do NOT optimize single-frame OCR. Optimize vote aggregation.",
+ "parseq_install": "pip install -e ~/iceiq-dev/models/parseq/",
+ "vitpose_crop": "Use YOLOv8-pose shoulder(5,6) and hip(11,12) keypoints to crop torso region. This is MUCH better than full bbox for OCR."
+}

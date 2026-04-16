@@ -1,0 +1,6 @@
+{
+  "sprint_threshold_kmh": 16,
+  "stationary_threshold_kmh": 2,
+  "fatigue_window_sec": 60,
+  "recovery_rate": 0.1
+}

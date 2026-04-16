@@ -1,0 +1,7 @@
+team:
+  id: hockey_machine
+  name: "하키머신"
+  name_en: "Hockey Machine"
+  jersey_color: navy  # 짙은 네이비
+
+players: []  # 로스터 미확인 - 영상에서 자동 수집 예정

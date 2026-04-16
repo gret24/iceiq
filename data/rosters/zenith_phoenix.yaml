@@ -1,0 +1,30 @@
+players:
+- name: Troy
+  number: 22
+  position: skater
+- name: null
+  number: 86
+  position: skater
+- name: IAN
+  number: 78
+  position: skater
+- name: MYEONGJUN
+  number: 3
+  position: skater
+- name: SEHOON
+  number: 68
+  position: skater
+- name: null
+  number: 23
+  position: skater
+- name: DOJUN
+  number: 12
+  position: skater
+- name: CHENSHIN
+  number: 71
+  position: skater
+team:
+  id: team_a
+  jersey_color: dark_green
+  name: 제니스 피닉스
+  name_en: Zenith Phoenix

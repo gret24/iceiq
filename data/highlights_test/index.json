@@ -1,0 +1,58 @@
+{
+  "video_source": "/Users/hanhyeonseong/iceiq-dev/data/videos/game1.mp4",
+  "total_events": 3,
+  "clips_extracted": 3,
+  "clips": [
+    {
+      "rank": 1,
+      "clip_file": "highlight_01_faceoff_373s.mp4",
+      "event_type": "faceoff",
+      "time_sec": 373.0,
+      "score": 3.0,
+      "event": {
+        "event": "faceoff",
+        "time_sec": 373.0,
+        "location": "nz_pos_right",
+        "dot_pos": [
+          7.0,
+          22.86
+        ]
+      },
+      "file_size": 3906398
+    },
+    {
+      "rank": 2,
+      "clip_file": "highlight_02_faceoff_383s.mp4",
+      "event_type": "faceoff",
+      "time_sec": 383.0,
+      "score": 3.0,
+      "event": {
+        "event": "faceoff",
+        "time_sec": 383.0,
+        "location": "nz_neg_left",
+        "dot_pos": [
+          -7.0,
+          -22.86
+        ]
+      },
+      "file_size": 3451764
+    },
+    {
+      "rank": 3,
+      "clip_file": "highlight_03_faceoff_348s.mp4",
+      "event_type": "faceoff",
+      "time_sec": 348.0,
+      "score": 2.5,
+      "event": {
+        "event": "faceoff",
+        "time_sec": 348.0,
+        "location": "center",
+        "dot_pos": [
+          0.0,
+          0.0
+        ]
+      },
+      "file_size": 4426316
+    }
+  ]
+}

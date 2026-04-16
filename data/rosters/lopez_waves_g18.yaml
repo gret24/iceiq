@@ -1,0 +1,30 @@
+team:
+  id: lopez
+  name: "로페즈"
+  name_en: "Lopez"
+  jersey_color: white  # 흰 유니폼
+
+players:
+  - number: 17
+    name: null
+    position: skater
+
+  - number: 27
+    name: null
+    position: skater
+
+  - number: 67
+    name: null
+    position: skater
+
+  - number: 88
+    name: null
+    position: skater
+
+  - number: null
+    name: null
+    position: goalie
+    note: "골리 확인됨, 번호 미확인"
+
+# 아직 번호 미확인 선수들 다수 존재
+# 영상 OCR 진행중

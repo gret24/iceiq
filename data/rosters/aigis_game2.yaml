@@ -1,0 +1,30 @@
+players:
+- name: 윤지성
+  number: 4
+  position: skater
+- name: 박소윤
+  number: null
+  position: skater
+- name: 이봄
+  number: 14
+  position: skater
+- name: 임도준
+  number: 28
+  position: skater
+- name: 이민서
+  number: 36
+  position: skater
+- name: 한승원
+  number: 47
+  position: skater
+- name: 김승후
+  number: 61
+  position: skater
+- name: 매그너스
+  number: null
+  position: goalie
+team:
+  id: aigis
+  jersey_color: white
+  name: 아이기스
+  name_en: Aigis

@@ -1,0 +1,7 @@
+team:
+  id: goyang_eagles
+  name: "고양이글스"
+  name_en: "Goyang Eagles"
+  jersey_color: black
+
+players: []  # 로스터 미확인 - 영상에서 자동 수집 예정

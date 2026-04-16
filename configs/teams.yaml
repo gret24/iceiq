@@ -1,0 +1,21 @@
+teams:
+  - id: team_a
+    name: "제니스 피닉스"
+    name_en: "Zenith Phoenix"
+    jersey_color: dark_green
+    hsv_range:
+      lower: [40, 40, 20]
+      upper: [100, 255, 180]
+
+  - id: team_b
+    name: "아이기스"
+    name_en: "Aigis"
+    jersey_color: white
+    hsv_range:
+      lower: [0, 0, 180]
+      upper: [180, 40, 255]
+
+game:
+  video: data/videos/game1.mp4
+  competition: "POLARLS CUP U-12"
+  category: U-12

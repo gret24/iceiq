@@ -1,0 +1,99 @@
+{
+  "team": "Aigis",
+  "season": "2025-2026",
+  "organization": "Aigis Youth Hockey Club",
+  "coach": "Coach Name",
+  "contact": "contact@aigis.example.com",
+  "players": [
+    {
+      "number": 4,
+      "name": "윤지성",
+      "position": "RD",
+      "shot_hand": "R",
+      "birthdate": "2016-03-15",
+      "height_cm": 172,
+      "weight_kg": 68,
+      "jersey": "4"
+    },
+    {
+      "number": 11,
+      "name": "박리오",
+      "position": "LW",
+      "shot_hand": "L",
+      "birthdate": "2017-07-22",
+      "height_cm": 168,
+      "weight_kg": 62,
+      "jersey": "11"
+    },
+    {
+      "number": 14,
+      "name": "이봄",
+      "position": "LD",
+      "shot_hand": "R",
+      "birthdate": "2015-11-08",
+      "height_cm": 175,
+      "weight_kg": 71,
+      "jersey": "14"
+    },
+    {
+      "number": 25,
+      "name": "김재원",
+      "position": "RW",
+      "shot_hand": "R",
+      "birthdate": "2018-02-10",
+      "height_cm": 165,
+      "weight_kg": 58,
+      "jersey": "25"
+    },
+    {
+      "number": 28,
+      "name": "임도준",
+      "position": "C",
+      "shot_hand": "L",
+      "birthdate": "2014-09-20",
+      "height_cm": 178,
+      "weight_kg": 74,
+      "jersey": "28"
+    },
+    {
+      "number": 36,
+      "name": "남다름",
+      "position": "RW",
+      "shot_hand": "R",
+      "birthdate": "2019-05-03",
+      "height_cm": 160,
+      "weight_kg": 52,
+      "jersey": "36"
+    },
+    {
+      "number": 47,
+      "name": "한승원",
+      "position": "LD",
+      "shot_hand": "L",
+      "birthdate": "2013-12-12",
+      "height_cm": 180,
+      "weight_kg": 76,
+      "jersey": "47"
+    },
+    {
+      "number": 61,
+      "name": "김승후",
+      "position": "C",
+      "shot_hand": "R",
+      "birthdate": "2012-01-28",
+      "height_cm": 182,
+      "weight_kg": 79,
+      "jersey": "61"
+    },
+    {
+      "number": 99,
+      "name": "신입선수",
+      "position": "LW",
+      "shot_hand": "R",
+      "birthdate": "2017-05-20",
+      "height_cm": 170,
+      "weight_kg": 65,
+      "jersey": "99"
+    }
+  ]
+}

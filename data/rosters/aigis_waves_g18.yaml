@@ -1,0 +1,46 @@
+team:
+  id: aigis
+  name: "아이기스"
+  name_en: "Aigis"
+  jersey_color: red  # waves_g18 경기
+
+players:
+  - number: 4
+    name: "윤지성"
+    position: skater
+  - number: 6
+    name: "박소윤"
+    position: skater
+  - number: 11
+    name: "박리오"
+    position: skater
+  - number: 12
+    name: "이준표"
+    position: skater
+  - number: 14
+    name: "이봄"
+    position: skater
+  - number: 25
+    name: "김재원"
+    position: skater
+  - number: 28
+    name: "임도준"
+    position: skater
+  - number: 36
+    name: "이민서"
+    position: skater
+  - number: 42
+    name: "남다름"
+    position: skater
+  - number: 47
+    name: "한승원"
+    position: skater
+  - number: 61
+    name: "김승후"
+    position: skater
+  - number: 94
+    name: "김태윤"
+    position: skater
+  - number: null
+    name: "여승윤"
+    position: goalie

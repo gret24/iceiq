@@ -1,0 +1,15 @@
+{
+  "event_scores": {
+    "goal": 100,
+    "shot_on_goal": 50,
+    "big_hit": 70,
+    "power_play": 60,
+    "man_advantage": 55,
+    "zone_entry": 25,
+    "turnover": 30
+  },
+  "min_score_threshold": 25,
+  "default_highlight_duration": 150,
+  "pre_event_duration_frames": 90,
+  "post_event_duration_frames": 150
+}

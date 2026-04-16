@@ -1,0 +1,14 @@
+# BotSORT 하키 최적화 설정
+# 목표: 300+ IDs → 20-35 stable IDs
+tracker_type: botsort
+track_high_thresh: 0.35
+track_low_thresh: 0.10
+new_track_thresh: 0.45
+fuse_score: True
+track_buffer: 90
+match_thresh: 0.75
+gmc_method: none
+proximity_thresh: 0.25
+appearance_thresh: 0.40
+with_reid: True
+model: auto

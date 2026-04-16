@@ -1,0 +1,6 @@
+data/uploads/*
+data/results/*
+data/highlights/*
+__pycache__
+*.pyc
+.git

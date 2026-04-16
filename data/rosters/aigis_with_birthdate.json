@@ -1,0 +1,14 @@
+{
+  "team": "Aigis Youth",
+  "season": "2025-2026",
+  "players": [
+    {"number": 4, "name": "윤지성", "position": "D", "shot_hand": "auto", "birthdate": "2016-03-15"},
+    {"number": 11, "name": "박리오", "position": "F", "shot_hand": "auto", "birthdate": "2017-07-22"},
+    {"number": 14, "name": "이봄", "position": "D", "shot_hand": "auto", "birthdate": "2015-11-08"},
+    {"number": 25, "name": "김재원", "position": "F", "shot_hand": "auto", "birthdate": "2018-02-10"},
+    {"number": 28, "name": "임도준", "position": "F", "shot_hand": "auto", "birthdate": "2014-09-20"},
+    {"number": 36, "name": "남다름", "position": "F", "shot_hand": "auto", "birthdate": "2019-05-03"},
+    {"number": 47, "name": "한승원", "position": "F", "shot_hand": "L", "birthdate": "2013-12-12"},
+    {"number": 61, "name": "김승후", "position": "F", "shot_hand": "auto", "birthdate": "2012-01-28"}
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "method": "pixel_ratio",
+  "frame_width": 1920,
+  "frame_height": 1080,
+  "rink_length_m": 52.0,
+  "meters_per_pixel_x": 0.027083333333333334,
+  "meters_per_pixel_y": 0.0162,
+  "note": "approximate, +-10% error, good for relative comparison"
+}
