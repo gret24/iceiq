@@ -23,4 +23,4 @@ RUN mkdir -p data/uploads data/results data/highlights
 EXPOSE 8000
 
 # 시작
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000", "--limit-max-request-size", "2147483648"]
+CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]
