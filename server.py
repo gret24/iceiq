@@ -223,48 +223,6 @@ async def run_analysis(job_id: str, video_path: str, roster_path: str, homo_poin
         jobs[job_id]["status"] = "error"
         jobs[job_id]["message"] = str(e)[:200]
 
-# === YouTube Background Task ===
-async def run_youtube_analysis(job_id: str, youtube_url: str, roster_path: str):
-    """yt-dlp로 영상 다운로드 후 run_analysis 호출"""
-    try:
-        if not YT_DLP_AVAILABLE:
-            jobs[job_id]["status"] = "error"
-            jobs[job_id]["message"] = "yt-dlp not installed"
-            return
-
-        jobs[job_id]["status"] = "processing"
-        jobs[job_id]["message"] = "YouTube에서 영상 다운로드 중..."
-        jobs[job_id]["progress"] = 5
-
-        ydl_opts = {
-            'outtmpl': str(UPLOAD_DIR / f'{job_id}_%(title).50s.%(ext)s'),
-            'format': 'best[height<=1080][ext=mp4]/best[height<=1080]/best',
-            'quiet': True,
-            'no_warnings': True,
-        }
-        video_path = None
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(youtube_url, download=True)
-            video_path = ydl.prepare_filename(info)
-            # ext 변환 후 실제 파일명 탐색
-            if not Path(video_path).exists():
-                for ext in ('mp4', 'mkv', 'webm', 'mov'):
-                    candidate = Path(video_path).with_suffix(f'.{ext}')
-                    if candidate.exists():
-                        video_path = str(candidate)
-                        break
-
-        jobs[job_id]["video_stem"] = Path(video_path).stem
-        jobs[job_id]["message"] = "다운로드 완료, 분석 시작..."
-        jobs[job_id]["progress"] = 15
-
-        await run_analysis(job_id, video_path, roster_path)
-
-    except Exception as e:
-        jobs[job_id]["status"] = "error"
-        jobs[job_id]["message"] = str(e)[:300]
-
-
 # === API Endpoints ===
 @app.get("/")
 async def root():
@@ -325,29 +283,60 @@ async def analyze_youtube(
     team_name: str = Form("Aigis"),
     roster_file: str = Form("aigis.json"),
 ):
-    """YouTube URL에서 영상 다운로드 후 분석"""
+    """YouTube URL에서 영상 동기 다운로드 후 분석 큐 등록"""
+    import yt_dlp as _yt_dlp
+
+    job_id = str(uuid.uuid4())[:8]
+
+    ydl_opts = {
+        'outtmpl': str(UPLOAD_DIR / f'{job_id}_%(title).60s.%(ext)s'),
+        'format': 'best[height<=1080]/best',
+        'quiet': True,
+        'no_warnings': True,
+    }
+
+    try:
+        with _yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(youtube_url, download=True)
+            video_path = Path(ydl.prepare_filename(info))
+            # ffmpeg 변환 후 실제 파일 탐색
+            if not video_path.exists():
+                for ext in ('mp4', 'mkv', 'webm', 'mov'):
+                    candidate = video_path.with_suffix(f'.{ext}')
+                    if candidate.exists():
+                        video_path = candidate
+                        break
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"YouTube download failed: {e}")
+
     roster_path = ROSTER_DIR / roster_file
     if not roster_path.exists():
         raise HTTPException(status_code=400, detail=f"Roster not found: {roster_file}")
 
-    job_id = str(uuid.uuid4())[:8]
+    video_stem = video_path.stem
 
     jobs[job_id] = {
         "job_id": job_id,
         "status": "queued",
         "progress": 0,
-        "message": "YouTube 다운로드 대기 중...",
+        "message": "Downloaded from YouTube, queued for analysis",
         "created_at": datetime.now().isoformat(),
         "completed_at": None,
         "result_path": None,
-        "video_name": youtube_url,
-        "video_stem": job_id,
+        "video_name": video_path.name,
+        "video_stem": video_stem,
         "team_name": team_name,
     }
 
-    background_tasks.add_task(run_youtube_analysis, job_id, youtube_url, str(roster_path))
+    background_tasks.add_task(run_analysis, job_id, str(video_path), str(roster_path))
 
-    return {"job_id": job_id, "video_stem": job_id, "game_id": f"{job_id}_{job_id}", "status": "queued", "message": "YouTube download started"}
+    return {
+        "job_id": job_id,
+        "video_stem": video_stem,
+        "game_id": f"{job_id}_{video_stem}",
+        "status": "queued",
+        "message": "YouTube video downloaded and queued",
+    }
 
 @app.post("/api/analyze/local")
 async def analyze_local(
