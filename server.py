@@ -2,7 +2,7 @@
 IceIQ API Server
 FastAPI wrapper for analyze_game.py pipeline
 """
-import os, json, uuid, time, asyncio, shutil, subprocess
+import os, re, json, uuid, time, asyncio, shutil, subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -313,7 +313,18 @@ async def analyze_youtube(
     if not roster_path.exists():
         raise HTTPException(status_code=400, detail=f"Roster not found: {roster_file}")
 
-    video_stem = video_path.stem
+    # 파일명 sanitize: 영문/숫자/한글/언더스코어/하이픈만 남기고 나머지는 _로 치환
+    raw_stem = video_path.stem
+    safe_stem = re.sub(r'[^\w\-가-힣]', '_', raw_stem)
+    safe_stem = re.sub(r'_+', '_', safe_stem)   # 연속 _ 제거
+    safe_stem = safe_stem.strip('_')             # 앞뒤 _ 제거
+    safe_stem = safe_stem[:50]                   # 50자 제한
+    video_stem = safe_stem or job_id             # 공백 방지용 fallback
+
+    safe_path = video_path.parent / f"{video_stem}{video_path.suffix}"
+    if video_path != safe_path:
+        video_path.rename(safe_path)
+        video_path = safe_path
 
     jobs[job_id] = {
         "job_id": job_id,
