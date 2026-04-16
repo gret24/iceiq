@@ -217,21 +217,28 @@ async def run_analysis(job_id: str, video_path: str, roster_path: str, homo_poin
         jobs[job_id]["message"] = "Detecting & tracking players..."
         jobs[job_id]["progress"] = 10
 
-        # Run the actual pipeline
+        # Run the actual pipeline (stderr=PIPE로 캡처해야 .read() 가능)
         process = await asyncio.create_subprocess_shell(
             cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
             cwd=str(BASE_DIR)
         )
 
-        # Wait for completion (log to file instead of pipe)
-        await process.wait()
+        # Wait for completion + stderr 수집
+        _, stderr_bytes = await process.communicate()
 
         if process.returncode == 0:
             # Generate heatmaps
             heatmap_cmd = f'cd {BASE_DIR} && eval "$(/opt/homebrew/bin/conda shell.bash hook)" && conda activate iceiq && '
             heatmap_cmd += f'python3 heatmap_homo.py'
-            heatmap_proc = await asyncio.create_subprocess_shell(heatmap_cmd, cwd=str(BASE_DIR))
-            await heatmap_proc.wait()
+            heatmap_proc = await asyncio.create_subprocess_shell(
+                heatmap_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(BASE_DIR)
+            )
+            await heatmap_proc.communicate()
 
             jobs[job_id]["status"] = "done"
             jobs[job_id]["message"] = "Analysis complete!"
@@ -239,9 +246,9 @@ async def run_analysis(job_id: str, video_path: str, roster_path: str, homo_poin
             jobs[job_id]["completed_at"] = datetime.now().isoformat()
             jobs[job_id]["result_path"] = str(output_dir)
         else:
-            stderr = await process.stderr.read()
+            err_msg = stderr_bytes.decode(errors="replace")[:500] if stderr_bytes else "unknown error"
             jobs[job_id]["status"] = "error"
-            jobs[job_id]["message"] = f"Error: {stderr.decode()[:200]}"
+            jobs[job_id]["message"] = f"Error: {err_msg}"
 
     except Exception as e:
         jobs[job_id]["status"] = "error"
