@@ -425,8 +425,8 @@ async def analyze_r2(
     if not roster_path.exists():
         raise HTTPException(status_code=400, detail=f"Roster not found: {roster_file}")
 
-    # R2 → 로컬 다운로드
-    local_filename = f"{job_id}_{Path(r2_key).name}"
+    # R2 → 로컬 다운로드 (r2_key 이름에 이미 job_id 포함됨)
+    local_filename = Path(r2_key).name
     local_path = UPLOAD_DIR / local_filename
     try:
         r2_client.download_file(R2_BUCKET, r2_key, str(local_path))
