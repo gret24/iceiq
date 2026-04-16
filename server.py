@@ -55,7 +55,7 @@ RESULTS_DIR = BASE_DIR / "data" / "results"
 ROSTER_DIR = BASE_DIR / "data" / "rosters"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-MAX_UPLOAD_SIZE = 4 * 1024 * 1024 * 1024  # 4 GB
+MAX_UPLOAD_SIZE = 10 * 1024 * 1024 * 1024  # 10 GB
 
 
 class LimitUploadSize(BaseHTTPMiddleware):
