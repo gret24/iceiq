@@ -11,6 +11,9 @@ from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPExcept
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
 import math
 
 # ─── 포즈 키포인트 → 방향 벡터 ──────────────────────────────────────────────
@@ -51,8 +54,24 @@ RESULTS_DIR = BASE_DIR / "data" / "results"
 ROSTER_DIR = BASE_DIR / "data" / "rosters"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
+MAX_UPLOAD_SIZE = 2 * 1024 * 1024 * 1024  # 2 GB
+
+
+class LimitUploadSize(BaseHTTPMiddleware):
+    """업로드 파일 크기를 MAX_UPLOAD_SIZE로 제한 (413 반환)."""
+    async def dispatch(self, request: Request, call_next) -> Response:
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > MAX_UPLOAD_SIZE:
+            return Response(
+                content=f"Request too large. Max {MAX_UPLOAD_SIZE // (1024**2)} MB.",
+                status_code=413,
+            )
+        return await call_next(request)
+
+
 app = FastAPI(title="IceIQ API", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(LimitUploadSize)
 
 # In-memory job tracker (replace with Redis/Firestore later)
 jobs = {}
