@@ -21,6 +21,30 @@ except ImportError:
     YT_DLP_AVAILABLE = False
 import math
 
+# ─── Cloudflare R2 (boto3 S3-compatible) ─────────────────────────────────────
+try:
+    import boto3
+    from botocore.config import Config as BotoConfig
+    R2_ENDPOINT   = os.getenv("R2_ENDPOINT",   "")
+    R2_ACCESS_KEY = os.getenv("R2_ACCESS_KEY", "")
+    R2_SECRET_KEY = os.getenv("R2_SECRET_KEY", "")
+    R2_BUCKET     = os.getenv("R2_BUCKET",     "iceiq-videos")
+    if R2_ENDPOINT and R2_ACCESS_KEY and R2_SECRET_KEY:
+        r2_client = boto3.client(
+            "s3",
+            endpoint_url=R2_ENDPOINT,
+            aws_access_key_id=R2_ACCESS_KEY,
+            aws_secret_access_key=R2_SECRET_KEY,
+            config=BotoConfig(signature_version="s3v4"),
+        )
+        R2_AVAILABLE = True
+    else:
+        r2_client = None
+        R2_AVAILABLE = False
+except ImportError:
+    r2_client = None
+    R2_AVAILABLE = False
+
 # ─── 포즈 키포인트 → 방향 벡터 ──────────────────────────────────────────────
 
 def calc_ori(kps) -> list | None:
@@ -348,6 +372,102 @@ async def analyze_youtube(
         "status": "queued",
         "message": "YouTube video downloaded and queued",
     }
+
+# ─── R2 Presigned Upload ──────────────────────────────────────────────────────
+
+@app.post("/api/upload/presigned")
+async def get_presigned_url(
+    filename: str = Form(...),
+    content_type: str = Form("video/mp4"),
+):
+    """앱이 R2에 직접 PUT 업로드할 수 있는 Presigned URL 발급 (유효 1시간)"""
+    if not R2_AVAILABLE:
+        raise HTTPException(status_code=503, detail="R2 not configured (missing env vars)")
+
+    job_id = str(uuid.uuid4())[:8]
+    safe_filename = re.sub(r'[^\w\-가-힣.]', '_', filename)
+    r2_key = f"uploads/{job_id}_{safe_filename}"
+
+    try:
+        upload_url = r2_client.generate_presigned_url(
+            "put_object",
+            Params={
+                "Bucket": R2_BUCKET,
+                "Key": r2_key,
+                "ContentType": content_type,
+            },
+            ExpiresIn=3600,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate presigned URL: {e}")
+
+    return {
+        "job_id": job_id,
+        "upload_url": upload_url,
+        "r2_key": r2_key,
+        "expires_in": 3600,
+    }
+
+
+@app.post("/api/analyze/r2")
+async def analyze_r2(
+    background_tasks: BackgroundTasks,
+    job_id: str = Form(...),
+    r2_key: str = Form(...),
+    team_name: str = Form("Aigis"),
+    roster_file: str = Form("aigis.json"),
+):
+    """R2에 업로드된 영상을 서버로 다운로드 후 분석 큐 등록"""
+    if not R2_AVAILABLE:
+        raise HTTPException(status_code=503, detail="R2 not configured (missing env vars)")
+
+    roster_path = ROSTER_DIR / roster_file
+    if not roster_path.exists():
+        raise HTTPException(status_code=400, detail=f"Roster not found: {roster_file}")
+
+    # R2 → 로컬 다운로드
+    local_filename = f"{job_id}_{Path(r2_key).name}"
+    local_path = UPLOAD_DIR / local_filename
+    try:
+        r2_client.download_file(R2_BUCKET, r2_key, str(local_path))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"R2 download failed: {e}")
+
+    # video_stem sanitize (YouTube와 동일 로직)
+    raw_stem = local_path.stem
+    safe_stem = re.sub(r'[^\w\-가-힣]', '_', raw_stem)
+    safe_stem = re.sub(r'_+', '_', safe_stem).strip('_')[:50]
+    video_stem = safe_stem or job_id
+
+    safe_path = local_path.parent / f"{video_stem}{local_path.suffix}"
+    if local_path != safe_path:
+        local_path.rename(safe_path)
+        local_path = safe_path
+
+    jobs[job_id] = {
+        "job_id": job_id,
+        "status": "queued",
+        "progress": 0,
+        "message": "Downloaded from R2, queued for analysis",
+        "created_at": datetime.now().isoformat(),
+        "completed_at": None,
+        "result_path": None,
+        "video_name": local_path.name,
+        "video_stem": video_stem,
+        "team_name": team_name,
+        "r2_key": r2_key,
+    }
+
+    background_tasks.add_task(run_analysis, job_id, str(local_path), str(roster_path))
+
+    return {
+        "job_id": job_id,
+        "video_stem": video_stem,
+        "game_id": f"{job_id}_{video_stem}",
+        "status": "queued",
+        "message": "R2 video queued for analysis",
+    }
+
 
 @app.post("/api/analyze/local")
 async def analyze_local(
