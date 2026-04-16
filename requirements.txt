@@ -7,4 +7,5 @@ easyocr
 numpy
 Pillow
 scipy
+yt-dlp
 pickle5; python_version<"3.8"
