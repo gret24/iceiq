@@ -48,7 +48,8 @@ def calc_ori(kps) -> list | None:
 
 
 # === Config ===
-BASE_DIR = Path(os.path.expanduser("~/iceiq-dev"))
+# Docker: /app  |  로컬: ~/iceiq-dev
+BASE_DIR = Path(os.environ.get("ICEIQ_BASE_DIR", Path(__file__).parent))
 UPLOAD_DIR = BASE_DIR / "data" / "uploads"
 RESULTS_DIR = BASE_DIR / "data" / "results"
 ROSTER_DIR = BASE_DIR / "data" / "rosters"
