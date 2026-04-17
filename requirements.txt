@@ -10,3 +10,4 @@ scipy
 yt-dlp
 boto3>=1.34.0
 pickle5; python_version<"3.8"
+filterpy
