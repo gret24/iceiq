@@ -71,7 +71,7 @@ def _body_orientation(kps: np.ndarray) -> list | None:
 
 
 class YOLODetector:
-    def __init__(self, model_path='yolov8n-pose.pt', device='mps'):
+    def __init__(self, model_path='yolov8n-pose.pt', device=None):
         """
         Initialize YOLO pose detector
         pose 모델 사용 시 keypoints → ori 자동 계산
@@ -79,12 +79,19 @@ class YOLODetector:
 
         Args:
             model_path: YOLO 모델 경로 (pose 권장: yolov8n-pose.pt)
-            device: 'mps' | 'cuda' | 'cpu'
+            device: 'mps' | 'cuda' | 'cpu' | None (auto-detect)
         """
+        if device is None:
+            if torch.cuda.is_available():
+                device = 'cuda'
+            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                device = 'mps'
+            else:
+                device = 'cpu'
         self.device = device
         self.model = YOLO(model_path)
         self._is_pose = 'pose' in str(model_path).lower()
-        
+
         # Move model to specified device
         if device == 'mps' and torch.backends.mps.is_available():
             self.model.model = self.model.model.to('mps')
@@ -200,10 +207,10 @@ class YOLODetector:
         return annotated_frame
 
 class PuckDetector:
-    def __init__(self, device='mps'):
+    def __init__(self, device=None):
         """
         Initialize puck detector using color/motion detection
-        
+
         Args:
             device: Device for any ML operations
         """
