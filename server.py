@@ -16,11 +16,14 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 # ─── Python / conda 실행 경로 감지 ──────────────────────────────────────────
-# RunPod(Linux)와 macOS 모두에서 동작하도록 현재 서버와 동일한 Python 사용
-PYTHON_BIN = sys.executable  # 서버를 실행 중인 Python 그 자체
+# 우선순위: ICEIQ_PYTHON 환경변수 > sys.executable (서버 기동 Python)
+# RunPod에서 ML 패키지가 별도 conda env에 있을 경우:
+#   export ICEIQ_PYTHON=/opt/conda/envs/iceiq/bin/python3
+# 그 외에는 uvicorn을 띄운 Python이 ML 패키지도 갖고 있어야 함
+PYTHON_BIN = os.getenv("ICEIQ_PYTHON", sys.executable)
 
 def _build_analysis_cmd(script: str, extra_args: str = "") -> str:
-    """현재 Python 인터프리터로 스크립트를 실행하는 커맨드 반환 (conda 불필요)"""
+    """PYTHON_BIN 인터프리터로 스크립트를 실행하는 커맨드 반환"""
     return f'"{PYTHON_BIN}" {script} {extra_args}'
 
 try:
