@@ -2,7 +2,7 @@
 IceIQ API Server
 FastAPI wrapper for analyze_game.py pipeline
 """
-import os, re, json, uuid, time, asyncio, shutil, subprocess
+import os, re, json, uuid, time, asyncio, shutil, subprocess, sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -14,6 +14,15 @@ from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
+
+# ─── Python / conda 실행 경로 감지 ──────────────────────────────────────────
+# RunPod(Linux)와 macOS 모두에서 동작하도록 현재 서버와 동일한 Python 사용
+PYTHON_BIN = sys.executable  # 서버를 실행 중인 Python 그 자체
+
+def _build_analysis_cmd(script: str, extra_args: str = "") -> str:
+    """현재 Python 인터프리터로 스크립트를 실행하는 커맨드 반환 (conda 불필요)"""
+    return f'"{PYTHON_BIN}" {script} {extra_args}'
+
 try:
     import yt_dlp
     YT_DLP_AVAILABLE = True
@@ -208,9 +217,11 @@ async def run_analysis(job_id: str, video_path: str, roster_path: str, homo_poin
         game_name = Path(video_path).stem
         output_dir = RESULTS_DIR / game_name
 
-        # Build command
-        cmd = f'cd {BASE_DIR} && eval "$(/opt/homebrew/bin/conda shell.bash hook)" && conda activate iceiq && '
-        cmd += f'python3 analyze_game.py --video {video_path} --roster {roster_path}'
+        # Build command — sys.executable 사용으로 conda 경로 하드코딩 제거
+        cmd = _build_analysis_cmd(
+            f'{BASE_DIR}/analyze_game.py',
+            f'--video {video_path} --roster {roster_path}'
+        )
 
         # Update status phases
         jobs[job_id]["status"] = "phase1"
@@ -230,8 +241,7 @@ async def run_analysis(job_id: str, video_path: str, roster_path: str, homo_poin
 
         if process.returncode == 0:
             # Generate heatmaps
-            heatmap_cmd = f'cd {BASE_DIR} && eval "$(/opt/homebrew/bin/conda shell.bash hook)" && conda activate iceiq && '
-            heatmap_cmd += f'python3 heatmap_homo.py'
+            heatmap_cmd = _build_analysis_cmd(f'{BASE_DIR}/heatmap_homo.py')
             heatmap_proc = await asyncio.create_subprocess_shell(
                 heatmap_cmd,
                 stdout=asyncio.subprocess.PIPE,
