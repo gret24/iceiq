@@ -231,7 +231,7 @@ async def run_analysis(job_id: str, video_path: str, roster_path: str, homo_poin
         jobs[job_id]["message"] = "Detecting & tracking players..."
         jobs[job_id]["progress"] = 10
 
-        # Run the actual pipeline (stderr=PIPE로 캡처해야 .read() 가능)
+        # Run the actual pipeline — stdout을 줄별로 읽어 PROGRESS 마커 파싱
         process = await asyncio.create_subprocess_shell(
             cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -239,8 +239,25 @@ async def run_analysis(job_id: str, video_path: str, roster_path: str, homo_poin
             cwd=str(BASE_DIR)
         )
 
-        # Wait for completion + stderr 수집
-        _, stderr_bytes = await process.communicate()
+        # stdout 실시간 읽기 (PROGRESS: N 파싱)
+        stderr_lines = []
+        async def _read_stderr():
+            async for line in process.stderr:
+                stderr_lines.append(line.decode(errors="replace").rstrip())
+
+        asyncio.ensure_future(_read_stderr())
+
+        async for raw_line in process.stdout:
+            line = raw_line.decode(errors="replace").rstrip()
+            if line.startswith("PROGRESS:"):
+                try:
+                    pct = int(line.split(":", 1)[1].strip())
+                    jobs[job_id]["progress"] = pct
+                except ValueError:
+                    pass
+
+        await process.wait()
+        stderr_bytes = "\n".join(stderr_lines).encode()
 
         if process.returncode == 0:
             # Generate heatmaps
@@ -259,7 +276,7 @@ async def run_analysis(job_id: str, video_path: str, roster_path: str, homo_poin
             jobs[job_id]["completed_at"] = datetime.now().isoformat()
             jobs[job_id]["result_path"] = str(output_dir)
         else:
-            err_msg = stderr_bytes.decode(errors="replace")[:500] if stderr_bytes else "unknown error"
+            err_msg = stderr_bytes.decode(errors="replace")[:500] if isinstance(stderr_bytes, bytes) else str(stderr_bytes)[:500]
             jobs[job_id]["status"] = "error"
             jobs[job_id]["message"] = f"Error: {err_msg}"
 

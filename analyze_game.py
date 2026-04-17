@@ -480,10 +480,15 @@ def main():
     print(f"\nIceIQ Analyzer\nVideo: {args.video}\nOutput: {od}\nRink: {args.rink_length}m\n")
     
     t0 = time.time()
+    print("PROGRESS: 15", flush=True)
     data = phase1_video(args.video, cp, args.skip_video)
+    print("PROGRESS: 50", flush=True)
     players = phase2_identify(data, roster)
+    print("PROGRESS: 70", flush=True)
     stats, ts = phase3_analyze(players, data, config)
+    print("PROGRESS: 85", flush=True)
     phase4_output(stats, ts, players, od)
+    print("PROGRESS: 95", flush=True)
     print(f"\nTotal: {time.time()-t0:.0f}s")
 
 
