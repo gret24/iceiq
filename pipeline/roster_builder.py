@@ -103,7 +103,7 @@ class RosterBuilder:
     def __init__(
         self,
         model_path: str = "yolov8m.pt",
-        device: str = "mps",
+        device: str = None,
         output_dir: str = "/tmp/iceiq_roster",
         sample_mins: Optional[List[float]] = None,
         grid_size: int = 80,
@@ -279,7 +279,7 @@ def extract_roster_crops(
     video_path: str,
     output_dir: str = "/tmp/iceiq_roster",
     model_path: str = "yolov8m.pt",
-    device: str = "mps",
+    device: str = None,
     include_b64: bool = False,
 ) -> List[dict]:
     """

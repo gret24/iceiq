@@ -32,14 +32,21 @@ logger = logging.getLogger(__name__)
 class FullPipeline:
     """Complete pipeline for hockey video analysis"""
     
-    def __init__(self, video_path: str = None, device: str = 'mps'):
+    def __init__(self, video_path: str = None, device: str = None):
         """
         Initialize the full pipeline
-        
+
         Args:
             video_path: Path to video file (optional, can be set later)
-            device: Device for computation
+            device: Device for computation ('cuda'|'mps'|'cpu'|None for auto-detect)
         """
+        if device is None:
+            if torch.cuda.is_available():
+                device = 'cuda'
+            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                device = 'mps'
+            else:
+                device = 'cpu'
         self.video_path = video_path
         self.device = device
         

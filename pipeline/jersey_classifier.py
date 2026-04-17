@@ -24,7 +24,7 @@ from torchvision import models, transforms
 logger = logging.getLogger(__name__)
 
 _MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models')
-_DEVICE = torch.device('mps') if torch.backends.mps.is_available() else torch.device('cpu')
+_DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'mps' if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() else 'cpu')
 
 _TRANSFORM = transforms.Compose([
     transforms.ToTensor(),

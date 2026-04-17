@@ -18,7 +18,7 @@ class SmartJerseyClustering:
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        self.device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() else 'cpu')
         
         # Clustering parameters
         self.min_samples = config.get('min_samples', 3)

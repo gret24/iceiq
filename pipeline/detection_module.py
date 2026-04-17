@@ -8,7 +8,7 @@ class DetectionModule:
     def __init__(self, model_path="yolov8n.pt"):
         """Initialize detection module with YOLO model."""
         self.logger = logging.getLogger(__name__)
-        self.device = "mps" if torch.backends.mps.is_available() else "cpu"
+        self.device = "cuda" if torch.cuda.is_available() else ("mps" if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() else "cpu")
         
         try:
             self.model = YOLO(model_path)
