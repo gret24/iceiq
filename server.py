@@ -223,7 +223,7 @@ async def run_analysis(job_id: str, video_path: str, roster_path: str, homo_poin
         # Build command — sys.executable 사용으로 conda 경로 하드코딩 제거
         cmd = _build_analysis_cmd(
             f'{BASE_DIR}/analyze_game.py',
-            f'--video {video_path} --roster {roster_path}'
+            f'--video {video_path} --roster {roster_path} --output {output_dir}'
         )
 
         # Update status phases

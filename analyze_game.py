@@ -459,10 +459,11 @@ def main():
     parser.add_argument("--roster", default=None)
     parser.add_argument("--skip-video", action="store_true")
     parser.add_argument("--rink-length", type=float, default=52.0)
+    parser.add_argument("--output", default=None, help="Output directory (overrides default ~/iceiq-dev/data/results/{stem})")
     args = parser.parse_args()
-    
+
     vn = Path(args.video).stem
-    od = os.path.expanduser(f"~/iceiq-dev/data/results/{vn}")
+    od = args.output if args.output else os.path.expanduser(f"~/iceiq-dev/data/results/{vn}")
     cp = os.path.join(od, "cache.pkl")
     
     cfp = os.path.expanduser("~/iceiq-dev/configs/simple_homography.json")
