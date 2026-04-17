@@ -261,7 +261,7 @@ async def run_analysis(job_id: str, video_path: str, roster_path: str, homo_poin
 
         if process.returncode == 0:
             # Generate heatmaps
-            heatmap_cmd = _build_analysis_cmd(f'{BASE_DIR}/heatmap_homo.py')
+            heatmap_cmd = _build_analysis_cmd(f'{BASE_DIR}/heatmap_homo.py', str(output_dir))
             heatmap_proc = await asyncio.create_subprocess_shell(
                 heatmap_cmd,
                 stdout=asyncio.subprocess.PIPE,

@@ -1,12 +1,22 @@
 import pickle, numpy as np, os, cv2, json, sys
 from collections import defaultdict
 
-os.chdir(os.path.expanduser('~/iceiq-dev'))
+# Accept either a full result directory path or a game_name (legacy)
+_arg = sys.argv[1] if len(sys.argv) > 1 else None
 
-# Allow passing game name as argument
-game_name = sys.argv[1] if len(sys.argv) > 1 else 'game1'
-cache_path = f'data/results/{game_name}/cache.pkl'
-out_dir = f'data/results/{game_name}/heatmaps'
+if _arg and os.path.isabs(_arg):
+    # Called from server with absolute output_dir path
+    result_dir = _arg
+    cache_path = os.path.join(result_dir, 'cache.pkl')
+    out_dir = os.path.join(result_dir, 'heatmaps')
+    # configs still relative to iceiq-dev
+    os.chdir(os.path.expanduser('~/iceiq-dev'))
+else:
+    # Legacy: called with game_name or no args
+    os.chdir(os.path.expanduser('~/iceiq-dev'))
+    game_name = _arg or 'game1'
+    cache_path = f'data/results/{game_name}/cache.pkl'
+    out_dir = f'data/results/{game_name}/heatmaps'
 
 print(f'[heatmap_homo] Game: {game_name}')
 
