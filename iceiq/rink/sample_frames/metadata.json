@@ -1,0 +1,62 @@
+{
+  "sample_1": {
+    "source_file": "game1.mp4",
+    "resolution": "1920x1080",
+    "fps": 30.0,
+    "duration_sec": 2911.77,
+    "extract_timestamps_sec": [
+      3,
+      9,
+      15,
+      21,
+      27
+    ],
+    "frames": [
+      "sample_1_frame_01.jpg",
+      "sample_1_frame_02.jpg",
+      "sample_1_frame_03.jpg",
+      "sample_1_frame_04.jpg",
+      "sample_1_frame_05.jpg"
+    ]
+  },
+  "sample_2": {
+    "source_file": "waves_g18.mp4",
+    "resolution": "1280x720",
+    "fps": 60.0,
+    "duration_sec": 3880.0,
+    "extract_timestamps_sec": [
+      3,
+      9,
+      15,
+      21,
+      27
+    ],
+    "frames": [
+      "sample_2_frame_01.jpg",
+      "sample_2_frame_02.jpg",
+      "sample_2_frame_03.jpg",
+      "sample_2_frame_04.jpg",
+      "sample_2_frame_05.jpg"
+    ]
+  },
+  "sample_3": {
+    "source_file": "game2.mp4",
+    "resolution": "1280x720",
+    "fps": 60.0,
+    "duration_sec": 5005.02,
+    "extract_timestamps_sec": [
+      3,
+      9,
+      15,
+      21,
+      27
+    ],
+    "frames": [
+      "sample_3_frame_01.jpg",
+      "sample_3_frame_02.jpg",
+      "sample_3_frame_03.jpg",
+      "sample_3_frame_04.jpg",
+      "sample_3_frame_05.jpg"
+    ]
+  }
+}
