@@ -9,7 +9,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from standard_rink import STANDARD_POINTS
+from standard_rink import STANDARD_POINTS, RINK_PRESETS
 
 
 # ============================================================================
@@ -65,6 +65,13 @@ class RinkMap(BaseModel):
 
     rink_id: str = Field(..., description="링크 식별자 (예: mokdong_01)")
     camera_position_id: str = Field(..., description="카메라 위치 (예: sideline_center)")
+    preset_name: str | None = Field(
+        None,
+        description=(
+            "RINK_PRESETS 키 (예: 'IIHF_STANDARD', 'NHL_STANDARD', 'KOREA_YOUTH_TBD'). "
+            "None이면 비표준 또는 미지정 링크."
+        ),
+    )
 
     sample_frame_path: str | None = Field(None, description="태깅에 사용된 대표 프레임 경로")
     frame_width_px: int = Field(..., gt=0)
@@ -89,6 +96,14 @@ class RinkMap(BaseModel):
     def _validate_h_shape(cls, v: list[list[float]]) -> list[list[float]]:
         if len(v) != 3 or any(len(row) != 3 for row in v):
             raise ValueError("homography_matrix must be 3x3")
+        return v
+
+    @field_validator("preset_name")
+    @classmethod
+    def _validate_preset_name(cls, v: str | None) -> str | None:
+        if v is not None and v not in RINK_PRESETS:
+            valid = ", ".join(sorted(RINK_PRESETS.keys()))
+            raise ValueError(f"Unknown preset_name: '{v}'. Valid: {valid}")
         return v
 
 
