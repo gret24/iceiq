@@ -74,6 +74,10 @@ _COLOUR_RANGES: Dict[str, Tuple[np.ndarray, np.ndarray]] = {
         np.array([100,  60,  20], dtype=np.uint8),
         np.array([130, 255, 120], dtype=np.uint8),
     ),
+    "light_blue": (  # 하늘색 (아이스킹덤 등): S_min=60으로 white(S≤60) 겹침 방지
+        np.array([ 85,  60, 150], dtype=np.uint8),
+        np.array([110, 180, 255], dtype=np.uint8),
+    ),
 }
 
 # Colours that need dual-range detection (hue wraps around 0°)
